@@ -1,6 +1,6 @@
 [Unit]
 Description=RumblingPodcast worker (discover, download, transcribe, summarize, publish)
-Documentation=https://github.com/harshgandhi/RumblingPodcast
+Documentation=https://github.com/iharshgandhi/RumblingPodcast
 After=network-online.target
 Wants=network-online.target
 

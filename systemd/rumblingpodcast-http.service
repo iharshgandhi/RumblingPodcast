@@ -1,6 +1,6 @@
 [Unit]
 Description=RumblingPodcast feed server (RSS + audio on the configured port)
-Documentation=https://github.com/harshgandhi/RumblingPodcast
+Documentation=https://github.com/iharshgandhi/RumblingPodcast
 After=network.target
 
 [Service]

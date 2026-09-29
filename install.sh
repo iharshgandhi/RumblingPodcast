@@ -1,7 +1,7 @@
 #!/bin/bash
 # One-click installer for RumblingPodcast.
 #
-#   curl -fsSL https://raw.githubusercontent.com/harshgandhi/RumblingPodcast/main/install.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/iharshgandhi/RumblingPodcast/main/install.sh | sudo bash
 #
 # Interactive by default (asks which summarizer and model), but fully
 # scriptable with environment variables for unattended installs:
@@ -15,7 +15,7 @@
 
 set -uo pipefail
 
-REPO="${RP_REPO:-https://github.com/harshgandhi/RumblingPodcast.git}"
+REPO="${RP_REPO:-https://github.com/iharshgandhi/RumblingPodcast.git}"
 BRANCH="${RP_BRANCH:-main}"
 RP_ROOT="${RP_ROOT:-/opt/rumblingpodcast}"
 SRC_DIR="${RP_SRC_DIR:-/usr/local/share/rumblingpodcast-src}"

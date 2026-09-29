@@ -27,7 +27,7 @@ binary. The rest is bash, `curl`, `jq` and `ffmpeg`.
 ## One-click install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/harshgandhi/RumblingPodcast/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/iharshgandhi/RumblingPodcast/main/install.sh | sudo bash
 ```
 
 You'll be asked two questions: which channel, and how to summarize. Fully
@@ -35,7 +35,7 @@ unattended:
 
 ```bash
 RP_NONINTERACTIVE=1 RP_CHANNEL=usawatchdog RP_SUMMARIZE=none \
-  curl -fsSL https://raw.githubusercontent.com/harshgandhi/RumblingPodcast/main/install.sh | sudo bash
+  curl -fsSL https://raw.githubusercontent.com/iharshgandhi/RumblingPodcast/main/install.sh | sudo bash
 ```
 
 Supported variables: `RP_CHANNEL`, `RP_SUMMARIZE` (`none|local|openrouter`),
