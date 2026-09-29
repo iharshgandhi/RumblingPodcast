@@ -1,0 +1,82 @@
+# =============================================================================
+# RumblingPodcast - configuration
+# Author: Harsh Gandhi (harshgandhi.com) / Buho Smart Tools (buho.co.in)
+#
+# Format: key = value   ('#' starts a comment). No quotes needed.
+# =============================================================================
+
+# --- Channels ---------------------------------------------------------------
+# Rumble channel slug, numeric id, or full URL. Space-separated for several.
+#   usawatchdog   |   732873   |   https://rumble.com/c/usawatchdog
+channels = usawatchdog
+
+# Only consider videos uploaded within this many days.
+max_age_days = 7
+
+# --- Transcription ----------------------------------------------------------
+# 1 = prefer Rumble's own auto-generated captions (free, instant, no CPU).
+# 0 = always transcribe with whisper.cpp.
+# Either way, whisper.cpp is used as an automatic fallback when captions are
+# missing. This is why a Pi Zero 2 W is enough for hour-long videos.
+use_captions = 1
+
+# Only used when captions are unavailable.
+whisper_model = tiny.en
+whisper_model_file = ggml-tiny.en.bin
+whisper_model_alt_file = ggml-base.en.bin
+whisper_threads = 4
+
+# --- Summarization ----------------------------------------------------------
+# none       : no AI summary, fastest and lightest (default)
+# local      : llama.cpp with a small GGUF model, fully offline
+# openrouter : OpenRouter API, best quality, requires a key
+#
+# NOTE for Raspberry Pi Zero 2 W (415MB RAM): 'local' is NOT recommended.
+# Only ~165MB is free with Pi-hole running, and the smallest usable model is
+# ~105MB, which would push into swap. Use 'none' or 'openrouter' there.
+summarize = none
+
+# Which model to use for local mode. See: rp-summarize --list-models
+# gemma-3-270m-it-q4_k_m (253MB) is the sweet spot on >=2GB machines.
+model_local = gemma-3-270m-it-q4_k_m
+
+# Threads for local llama.cpp inference.
+llm_threads = 2
+# Words per chunk when summarizing a long transcript.
+llm_chunk_words = 1200
+
+# OpenRouter settings (used only when summarize = openrouter).
+model_remote = openai/gpt-4o-mini
+openrouter_key = sk-or-REPLACE_ME
+remote_max_chars = 60000
+remote_timeout = 180
+
+# --- Serving ----------------------------------------------------------------
+# Port for the RSS feed + audio. Deliberately NOT 80/443, which Pi-hole owns.
+serve_port = 8088
+# Public base URL used inside feed.xml enclosures. Leave as-is for LAN-only
+# use; set to your tunnel/domain for off-LAN access.
+feed_base_url = http://192.168.1.200:8088
+
+# --- Podcast metadata -------------------------------------------------------
+podcast_title = RumblingPodcast
+podcast_description = Automated podcast of Rumble channel interviews and talks.
+podcast_author = Harsh Gandhi
+podcast_email = noreply@example.com
+podcast_language = en
+timezone = Asia/Kolkata
+
+# --- Retention & scheduling -------------------------------------------------
+# Delete audio + summaries older than this many days. The RSS feed is rebuilt to
+# match. Transcripts are always kept.
+retention_days = 30
+
+# How often to scan channels for new videos (hours).
+scan_interval_hours = 6
+# Pause between videos, to stay gentle on a machine running Pi-hole (seconds).
+sleep_between_videos = 20
+# Pause between full scan cycles (seconds).
+loop_sleep = 1800
+
+# Skip videos that already have a .meta record (1) or reprocess them (0).
+skip_existing = 1

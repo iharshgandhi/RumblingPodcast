@@ -1,0 +1,19 @@
+# data and runtime artefacts
+data/
+logs/
+run/
+models/
+*.log
+*.pid
+*.lock
+
+# binaries fetched at install time
+bin/yt-dlp
+bin/whisper-cli
+bin/llama-cli
+
+# local config (rp.conf.example is committed)
+config/rp.conf
+
+# macOS
+.DS_Store

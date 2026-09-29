@@ -1,0 +1,23 @@
+[Unit]
+Description=RumblingPodcast worker (discover, download, transcribe, summarize, publish)
+Documentation=https://github.com/harshgandhi/RumblingPodcast
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/opt/rumblingpodcast/bin/worker
+Restart=always
+RestartSec=30
+
+# Be a good neighbour: Pi-hole's DNS resolution always wins.
+Nice=19
+IOSchedulingClass=idle
+CPUSchedulingPolicy=batch
+
+# Log to journal; the app also writes /opt/rumblingpodcast/logs/rp.log
+StandardOutput=append:/opt/rumblingpodcast/logs/worker.out
+StandardError=append:/opt/rumblingpodcast/logs/worker.err
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,146 @@
+#!/bin/bash
+# Build the podcast RSS feed from on-disk metadata.
+#
+# Meta records live in $RP_DATA/meta/<id>.meta as KEY=VALUE lines. Regenerating
+# the feed is idempotent and cheap, so it runs after every episode completes and
+# after every retention sweep.
+#
+# Author: Harsh Gandhi (harshgandhi.com) / Buho Smart Tools (buho.co.in)
+
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
+
+gen_feed() {
+  local outdir="${1:-$RP_DATA}"
+  local feed_dir="$outdir/feed"
+  mkdir -p "$feed_dir"
+
+    local base_url
+  base_url="$(cfg feed_base_url "http://$(hostname -I 2>/dev/null | awk '{print $1}'):$(cfg serve_port 8088)")"
+  local base_url="${base_url%/}"
+
+  local title;       title="$(cfg podcast_title 'RumblingPodcast')"
+  local description; description="$(cfg podcast_description 'Automated podcast from Rumble channels')"
+  local author;      author="$(cfg podcast_author 'Harsh Gandhi')"
+  local email;       email="$(cfg podcast_email 'noreply@example.com')"
+  local lang;        lang="$(cfg podcast_language 'en')"
+  local artwork;     artwork="$base_url/cover.jpg"
+
+  # The http server roots at $outdir, so publish feed.xml at the root and
+  # expose audio under media/ so enclosure URLs resolve.
+  mkdir -p "$outdir/media"
+  local tmp="$outdir/feed.xml.tmp"
+  cat > "$tmp" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>$(xml_escape "$title")</title>
+    <link>$(xml_escape "$base_url")</link>
+    <language>$(xml_escape "$lang")</language>
+    <description>$(xml_escape "$description")</description>
+    <generator>RumblingPodcast</generator>
+    <lastBuildDate>$(rfc822_date 0)</lastBuildDate>
+    <itunes:author>$(xml_escape "$author")</itunes:author>
+    <itunes:summary>$(xml_escape "$description")</itunes:summary>
+    <itunes:image href="$(xml_escape "$artwork")"/>
+    <itunes:category text="Technology"/>
+    <itunes:explicit>false</itunes:explicit>
+    <itunes:owner>
+      <itunes:name>$(xml_escape "$author")</itunes:name>
+      <itunes:email>$(xml_escape "$email")</itunes:email>
+    </itunes:owner>
+    <atom:link href="$(xml_escape "$base_url/feed.xml")" rel="self" type="application/rss+xml"/>
+EOF
+
+  # Newest first, and skip anything whose audio has aged out of retention.
+  local cutoff
+  cutoff="$(subtract_days "$(now_epoch)" "$(cfg retention_days 30)")"
+
+  local count=0
+  while IFS='|' read -r id title dur pubdate url audio summary_path thumb; do
+    [ -n "$id" ] || continue
+    [ -f "$audio" ] || continue                       # audio gone => drop episode
+    [ "$pubdate" -ge "$cutoff" ] 2>/dev/null || continue # aged out => drop episode
+    local esc_title guid
+    esc_title="$(xml_escape "$title")"
+    guid="rumble-$id"
+    # Hard-link the audio into the served media/ dir so the enclosure URL
+    # resolves without duplicating bytes on a small SD card.
+    local served="$outdir/media/${id}.m4a"
+    [ -f "$served" ] || ln "$audio" "$served" 2>/dev/null || cp "$audio" "$served" 2>/dev/null || true
+    local enclosure_url="$base_url/media/${id}.m4a"
+    local page_url="https://rumble.com${url}"
+
+    # Inline plain-text summary for the episode description / CDATA block.
+    local summary_text="" summary_body=""
+    if [ -f "$summary_path" ]; then
+      summary_text="$(head -c 4000 "$summary_path")"
+      summary_body="$(printf '%s' "$summary_text" | tr '\n' ' ')"
+    fi
+
+    # Precompute duration outside the heredoc: bash arithmetic is not valid
+    # inside command substitution within a heredoc.
+    local d_h d_m d_s dur_str
+    d_h=$(( dur / 3600 )); d_m=$(( (dur % 3600) / 60 )); d_s=$(( dur % 60 ))
+    dur_str="$(printf '%02d:%02d:%02d' "$d_h" "$d_m" "$d_s")"
+
+    cat >> "$tmp" <<EOF
+    <item>
+      <title>$esc_title</title>
+      <link>$(xml_escape "$page_url")</link>
+      <guid isPermaLink="false">$(xml_escape "$guid")</guid>
+      <pubDate>$(rfc822_date "$pubdate")</pubDate>
+      <description>$(xml_escape "$summary_text")</description>
+      <content:encoded><![CDATA[<p>$(printf '%s' "$summary_body")</p>]]></content:encoded>
+      <enclosure url="$(xml_escape "$enclosure_url")" length="$(wc -c < "$audio" | tr -d ' ')" type="audio/mp4"/>
+      <itunes:duration>$dur_str</itunes:duration>
+      <itunes:explicit>false</itunes:explicit>
+      <itunes:image href="$(xml_escape "$base_url/media/${id}.jpg")"/>
+    </item>
+EOF
+    count=$((count+1))
+  done < <(list_meta_sorted)
+
+  cat >> "$tmp" <<EOF
+  </channel>
+</rss>
+EOF
+  mv "$tmp" "$outdir/feed.xml"
+
+  # index.html so the URL is browsable.
+  {
+    printf '<!doctype html><meta charset=utf-8><title>%s</title>\n' "$(xml_escape "$title")"
+    printf '<h1>%s</h1><p><a href="feed.xml">RSS feed</a></p><ul>\n' "$(xml_escape "$title")"
+    while IFS='|' read -r id title dur pubdate url audio summary_path thumb; do
+      [ -n "$id" ] || continue
+      [ -f "$audio" ] || continue
+      printf '<li><a href="media/%s.m4a">%s</a></li>\n' \
+        "$(xml_escape "$id")" "$(xml_escape "$title")"
+    done < <(list_meta_sorted)
+    printf '</ul>\n'
+  } > "$outdir/index.html"
+
+  log_info "feed written: $outdir/feed.xml ($count episode(s))"
+}
+
+# Emit newest-first TSV: id|title|dur|pubdate|relurl|audio|summary|thumb
+list_meta_sorted() {
+  local meta_dir="$RP_DATA/meta"
+  [ -d "$meta_dir" ] || return 0
+  for f in "$meta_dir"/*.meta; do
+    [ -e "$f" ] || continue
+    local id title dur pubdate url audio summary thumb
+    id="$(sed -n 's/^ID=//p' "$f" | head -1)"
+    title="$(sed -n 's/^TITLE=//p' "$f" | head -1)"
+    dur="$(sed -n 's/^DUR=//p' "$f" | head -1)"
+    pubdate="$(sed -n 's/^PUBDATE=//p' "$f" | head -1)"
+    url="$(sed -n 's/^URL=//p' "$f" | head -1)"
+    audio="$RP_DATA/audio/${id}.m4a"
+    summary="$RP_DATA/summaries/${id}.txt"
+    thumb="$RP_DATA/meta/${id}.jpg"
+    printf '%s|%s|%s|%s|%s|%s|%s|%s\n' "$id" "$title" "$dur" "$pubdate" "$url" "$audio" "$summary" "$thumb"
+  done | sort -t'|' -k4,4rn
+}
+
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  gen_feed "$@"
+fi

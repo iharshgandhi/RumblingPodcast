@@ -1,0 +1,159 @@
+#!/bin/bash
+# rp-ctl - control RumblingPodcast: install, enable, disable, status, uninstall.
+#
+# Deliberately never touches Pi-hole's ports or services. Everything lives under
+# /opt/rumblingpodcast and uses its own systemd units.
+#
+# Author: Harsh Gandhi (harshgandhi.com) / Buho Smart Tools (buho.co.in)
+
+set -uo pipefail
+RP_ROOT="${RP_ROOT:-/opt/rumblingpodcast}"
+PREFIX="${PREFIX:-/usr/local}"
+SYSCTL=systemctl
+[ "$(id -u)" -ne 0 ] && SYSCTL="sudo systemctl"
+
+c_ok()   { printf '\033[32m%s\033[0m\n' "$*"; }
+c_warn() { printf '\033[33m%s\033[0m\n' "$*"; }
+c_err()  { printf '\033[31m%s\033[0m\n' "$*" >&2; }
+die()    { c_err "$*"; exit 1; }
+
+preflight() {
+  [ "$(id -u)" -eq 0 ] || die "run as root (or with sudo)"
+  local rw; rw="$(findmnt -no OPTIONS / | tr ',' '\n' | grep -E '^(rw|ro)$' | head -1)"
+  [ "$rw" = "ro" ] && die "root filesystem is READ-ONLY. Remount rw first (mount -o remount,rw /)."
+  [ -d "$RP_ROOT" ] || die "$RP_ROOT does not exist. Run 'rp-ctl install' first."
+}
+
+cmd_install() {
+  [ "$(id -u)" -eq 0 ] || die "run with sudo: sudo rp-ctl install"
+  local rw; rw="$(findmnt -no OPTIONS / | tr ',' '\n' | grep -E '^(rw|ro)$' | head -1)"
+  [ "$rw" = "ro" ] && die "root filesystem is READ-ONLY. Remount rw first."
+
+  echo "==> creating $RP_ROOT"
+  mkdir -p "$RP_ROOT"/{bin,config,data,logs,run,models}
+  mkdir -p "$RP_ROOT/data"/{audio,transcripts,summaries,meta,feed,video}
+
+  echo "==> dependencies"
+  if ! command -v ffmpeg >/dev/null; then
+    DEBIAN_FRONTEND=noninteractive apt-get update -qq
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ffmpeg
+  fi
+  for t in curl jq; do
+    command -v "$t" >/dev/null || DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$t"
+  done
+
+  if [ ! -x "$RP_ROOT/bin/yt-dlp" ]; then
+    echo "==> yt-dlp (standalone aarch64/x86_64 binary, no Python needed)"
+    local arch url
+    case "$(uname -m)" in
+      aarch64) arch="aarch64" ;;
+      armv7l)  arch="armv7l"  ;;
+      x86_64)  arch=""         ;;
+      *) die "unsupported arch $(uname -m)" ;;
+    esac
+    url="https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux${arch:+_$arch}"
+    curl -fL --retry 3 -o "$RP_ROOT/bin/yt-dlp" "$url" || die "yt-dlp download failed"
+    chmod 755 "$RP_ROOT/bin/yt-dlp"
+  fi
+
+  echo "==> config"
+  [ -f "$RP_ROOT/config/rp.conf" ] || cp "$RP_ROOT/config/rp.conf.example" "$RP_ROOT/config/rp.conf"
+  chown -R "${SUDO_USER:-root}:${SUDO_USER:-root}" "$RP_ROOT" 2>/dev/null || true
+
+  echo "==> systemd units"
+  cp "$RP_ROOT/systemd/rumblingpodcast-worker.service" /etc/systemd/system/
+  cp "$RP_ROOT/systemd/rumblingpodcast-http.service" /etc/systemd/system/
+  $SYSCTL daemon-reload
+
+  install -m 755 "$RP_ROOT/bin/rp-ctl" "$PREFIX/bin/rp-ctl"
+  c_ok "installed. Next: sudo rp-ctl enable"
+}
+
+cmd_enable() {
+  preflight
+  $SYSCTL enable --now rumblingpodcast-http.service  && c_ok "http serving on configured port"
+  $SYSCTL enable --now rumblingpodcast-worker.service && c_ok "worker running"
+}
+
+cmd_disable() {
+  # Stops processing but keeps the feed serving, and keeps all data.
+  $SYSCTL disable --now rumblingpodcast-worker.service && c_warn "worker stopped (feed still served)"
+}
+
+cmd_pause() {
+  cmd_disable
+  $SYSCTL stop rumblingpodcast-http.service && c_warn "http stopped too (nothing is consuming CPU)"
+}
+
+cmd_resume() { cmd_enable; }
+
+cmd_status() {
+  echo "--- units ---"
+  for u in rumblingpodcast-worker rumblingpodcast-http; do
+    printf '%-34s %s\n' "$u" "$($SYSCTL is-active $u.service 2>/dev/null)"
+  done
+  echo "--- config ---"
+  for k in channels summarize serve_port retention_days use_captions model_local model_remote; do
+    printf '%-34s %s\n' "$k" "$(sed -n "s/^[[:space:]]*$k[[:space:]]*=[[:space:]]*//p" "$RP_ROOT/config/rp.conf" | tail -1)"
+  done
+  echo "--- data ---"
+  printf '%-34s %s\n' "episodes"     "$(ls "$RP_ROOT/data/meta"/*.meta 2>/dev/null | wc -l)"
+  printf '%-34s %s\n' "transcripts"  "$(ls "$RP_ROOT/data/transcripts"/*.txt 2>/dev/null | wc -l)"
+  printf '%-34s %s\n' "audio size"   "$(du -sh "$RP_ROOT/data/audio" 2>/dev/null | cut -f1)"
+  printf '%-34s %s\n' "disk free"    "$(df -h / | awk 'NR==2{print $4}')"
+  printf '%-34s %s\n' "feed"         "$RP_ROOT/data/feed.xml"
+  echo "--- recent log ---"
+  tail -15 "$RP_ROOT/logs/rp.log" 2>/dev/null || echo "(no log yet)"
+}
+
+cmd_uninstall() {
+  [ "$(id -u)" -eq 0 ] || die "run with sudo: sudo rp-ctl uninstall"
+  echo "==> stopping and removing units"
+  $SYSCTL disable --now rumblingpodcast-worker.service 2>/dev/null
+  $SYSCTL disable --now rumblingpodcast-http.service 2>/dev/null
+  rm -f /etc/systemd/system/rumblingpodcast-*.service
+  $SYSCTL daemon-reload
+  $SYSCTL reset-failed 2>/dev/null
+  echo "==> removing CLI"
+  rm -f "$PREFIX/bin/rp-ctl"
+  # Data is preserved by default; --purge deletes it.
+  if [ "${1:-}" = "--purge" ]; then
+    echo "==> purging data and models"
+    rm -rf "$RP_ROOT"
+  else
+    echo "==> removing app files, keeping data/transcripts"
+    rm -rf "$RP_ROOT/bin" "$RP_ROOT/systemd" "$RP_ROOT/logs" "$RP_ROOT/run"
+    c_ok "data preserved at $RP_ROOT/data (re-run with --purge to delete everything)"
+  fi
+  c_ok "uninstalled. Pi-hole was never touched."
+}
+
+case "${1:-}" in
+  install)   cmd_install ;;
+  enable)    cmd_enable ;;
+  disable)   cmd_disable ;;
+  pause)     cmd_pause ;;
+  resume)    cmd_resume ;;
+  status)    cmd_status ;;
+  uninstall) cmd_uninstall "${2:-}" ;;
+  run-once)  preflight; "$RP_ROOT/bin/worker" --once ;;
+  feed)      preflight; "$RP_ROOT/bin/gen_feed" ;;
+  retention) preflight; "$RP_ROOT/bin/worker" --retention ;;
+  *)
+    cat <<EOF
+RumblingPodcast control
+
+  sudo rp-ctl install        install deps, yt-dlp, units, config
+  sudo rp-ctl enable         start worker + feed server
+  sudo rp-ctl disable        stop processing (feed stays up)
+  sudo rp-ctl pause          stop everything (zero CPU)
+  sudo rp-ctl resume         start again
+  sudo rp-ctl status         units, config, counts, recent log
+  sudo rp-ctl run-once       process pending videos now, then exit
+  sudo rp-ctl retention      run the 30-day cleanup now
+  sudo rp-ctl uninstall      remove units + app (keeps data)
+  sudo rp-ctl uninstall --purge   remove absolutely everything
+
+EOF
+    ;;
+esac

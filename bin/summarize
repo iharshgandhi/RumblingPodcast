@@ -1,0 +1,181 @@
+#!/bin/bash
+# Summarize a transcript using one of three backends.
+#
+#   none        - no summary, just transcription (cheapest)
+#   local       - llama.cpp with a small GGUF model, fully offline
+#   openrouter  - OpenRouter API, best quality, needs a key
+#
+# Author: Harsh Gandhi (harshgandhi.com) / Buho Smart Tools (buho.co.in)
+
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
+
+MODEL_CATALOG() {
+  cat <<'EOF'
+# id | gguf-repo/file | approx MB | fits 512MB Pi alongside pihole?
+smollm2-135m-instruct-q4_k_m|barackhusain1/smollm2-135m-instruct-GGUF/smollm2-135m-instruct-Q4_K_M.gguf|105|yes (fastest, weakest)
+gemma-3-270m-it-q4_k_m|unsloth/gemma-3-270m-it-GGUF/gemma-3-270m-it-Q4_K_M.gguf|253|yes (recommended)
+smollm2-360m-instruct-q4_k_m|bartowski/SmolLM2-360M-Instruct-GGUF/SmolLM2-360M-Instruct-Q4_K_M.gguf|270|yes (tight)
+smollm2-360m-instruct-q2_k|bartowski/SmolLM2-360M-Instruct-GGUF/SmolLM2-360M-Instruct-Q2_K.gguf|219|yes (very tight)
+qwen3-0.6b-q4_k_m|unsloth/Qwen3-0.6B-GGUF/Qwen3-0.6B-Q4_K_M.gguf|397|no (needs swap)
+qwen2.5-0.5b-instruct-q4_k_m|Qwen/Qwen2.5-0.5B-Instruct-GGUF/qwen2.5-0.5b-instruct-q4_k_m.gguf|491|no (needs swap)
+EOF
+}
+
+model_path_for() {
+  MODEL_CATALOG | awk -F'|' -v m="$1" '$1==m {print $2}'
+}
+
+model_size_for() {
+  MODEL_CATALOG | awk -F'|' -v m="$1" '$1==m {print $3}'
+}
+
+download_model() {
+  local id="$1" repo_file
+  repo_file="$(model_path_for "$id")"
+  if [ -z "$repo_file" ]; then
+    log_error "unknown model id: $id"
+    MODEL_CATALOG >&2
+    return 1
+  fi
+  mkdir -p "$RP_MODEL_DIR"
+  local out="$RP_MODEL_DIR/$(basename "$repo_file")"
+  if [ -s "$out" ]; then
+    log_info "model already present: $(basename "$out")"
+    printf '%s' "$out"; return 0
+  fi
+  local url="https://huggingface.co/${repo_file}?download=true"
+  log_info "downloading model $id (~$(model_size_for "$id")MB) -> $out"
+  curl -sL --max-time 1800 --retry 3 --retry-delay 5 -C - \
+       -o "$out.part" "$url" || { rm -f "$out.part"; return 1; }
+  mv "$out.part" "$out"
+  log_info "model ready: $(basename "$out")"
+  printf '%s' "$out"
+}
+
+# Chunk a long transcript so the small context window still sees the whole thing.
+split_chunks() {
+  local file="$1" outdir="$2" chunk_words="${3:-1200}"
+  mkdir -p "$outdir"
+  tr -s '[:space:]' '\n' < "$file" | awk -v n="$chunk_words" '
+    BEGIN{ i=1; c=1 }
+    { words[i++]=$0; if (i>n) { f=sprintf(sprintf("%s/chunk-%03d.txt", "'"$outdir"'", c)); 
+        for(j=1;j<=n;j++) print words[j] >> f; close(f); delete words; i=1; c++ } }
+    END{ if (i>0) { f=sprintf(sprintf("%s/chunk-%03d.txt", "'"$outdir"'", c));
+        for(j=1;j<i;j++) print words[j] >> f; close(f) } }
+  '
+  ls "$outdir"/chunk-*.txt 2>/dev/null | sort
+}
+
+PROMPT_HEAD='Below is a transcript of a video interview or talk. Summarise the main points as concise bullet points. Capture the guest'"'"'s key claims, any concrete figures or dates mentioned, and the overall conclusion. Do not invent details that are not in the text.
+
+TRANSCRIPT:
+'
+PROMPT_TAIL='
+
+Summary (5-8 bullet points, plain text):'
+
+summarize_local() {
+  local transcript="$1" model_path="$2"
+  local llama="$RP_BIN/llama-cli"
+  [ -x "$llama" ] || { log_error "llama-cli not found at $llama"; return 1; }
+  local chunks_dir; chunks_dir="$(mktemp -d)"
+  local chunk_summary chunk_final
+  chunk_summary="$(mktemp)"
+  mapfile -t chunks < <(split_chunks "$transcript" "$chunks_dir" "$(cfg llm_chunk_words 1200)")
+  log_info "local summarizer: ${#chunks[@]} chunk(s), model $(basename "$model_path")"
+  local first=1
+  for c in "${chunks[@]}"; do
+    local body; body="$(cat "$c")"
+    local out
+    out="$(printf '%s%s%s' "$PROMPT_HEAD" "$body" "$PROMPT_TAIL" \
+      | "$llama" -m "$model_path" -n 220 -c 2048 -t "$(cfg llm_threads 2)" --temp 0.3 -no-cnv \
+          -p "$(cat)" 2>/dev/null)" || out=""
+    [ -z "$out" ] && out="(local summarizer produced no output for this section)"
+    if [ "$first" -eq 1 ]; then
+      printf '%s\n' "$out" > "$chunk_summary"
+      first=0
+    else
+      printf '%s\n%s\n' "$chunk_summary" "$out" > "$chunk_summary.merge" && mv "$chunk_summary.merge" "$chunk_summary"
+    fi
+  done
+  # Final consolidation pass over the per-chunk notes.
+  chunk_final="$(cat "$chunk_summary")"
+  local final
+  final="$(printf '%s%s%s' "$PROMPT_HEAD" "$chunk_final" "$PROMPT_TAIL" \
+    | "$llama" -m "$model_path" -n 260 -c 2048 -t "$(cfg llm_threads 2)" --temp 0.3 -no-cnv \
+        -p "$(cat)" 2>/dev/null)"
+  rm -rf "$chunks_dir"
+  if [ -z "$final" ]; then
+    printf '%s\n' "$chunk_final"
+    return 0
+  fi
+  printf '%s\n' "$final"
+}
+
+summarize_remote() {
+  local transcript="$1"
+  local key; key="$(cfg openrouter_key)"
+  local model; model="$(cfg model_remote openai/gpt-4o-mini)"
+  if [ -z "$key" ] || [ "$key" = "sk-or-REPLACE_ME" ]; then
+    log_error "openrouter_key not set in $RP_CONFIG"
+    return 1
+  fi
+  local body limit
+  limit="$(cfg remote_max_chars 60000)"
+  body="$(head -c "$limit" "$transcript")"
+  # JSON-escape the transcript safely.
+  local esc
+  esc="$(printf '%s' "$body" | jq -Rs .)"
+  local payload
+  payload=$(jq -n --arg model "$model" \
+    --arg text "$body" \
+    '{model:$model,messages:[
+       {role:"system",content:"You summarise transcripts into concise bullet points. Only use information present in the text."},
+       {role:"user",content:("TRANSCRIPT:\n"+$text+"\n\nSummary (5-8 bullet points):")}],
+      temperature:0.3,max_tokens:700}')
+  local resp
+  resp="$(curl -s --max-time "$(cfg remote_timeout 180)" \
+     -H "Authorization: Bearer $key" \
+     -H 'Content-Type: application/json' \
+     -H 'HTTP-Referer: https://github.com/rumblingpodcast' \
+     -H 'X-Title: RumblingPodcast' \
+     -d "$payload" "https://openrouter.ai/api/v1/chat/completions")" || return 1
+  local out
+  out="$(printf '%s' "$resp" | jq -r '.choices[0].message.content // empty' 2>/dev/null)"
+  if [ -z "$out" ]; then
+    log_error "openrouter returned no content: $(printf '%s' "$resp" | head -c 300)"
+    return 1
+  fi
+  printf '%s\n' "$out"
+}
+
+# main: $1 = transcript path. Prints summary on stdout.
+summarize() {
+  local transcript="$1"
+  local mode; mode="$(cfg summarize local)"
+  case "$mode" in
+    none)
+      printf 'Summaries disabled (summarize = none).\n'
+      return 0 ;;
+    openrouter)
+      summarize_remote "$transcript" ;;
+    local|*)
+      local model_path
+      model_path="$RP_MODEL_DIR/$(basename "$(model_path_for "$(cfg model_local gemma-3-270m-it-q4_k_m)")")"
+      if [ ! -s "$model_path" ]; then
+        log_warn "local model not found, downloading $(cfg model_local)"
+        model_path="$(download_model "$(cfg model_local gemma-3-270m-it-q4_k_m)")" || {
+          log_error "local summarizer unavailable; falling back to none"
+          printf 'Local summarizer unavailable.\n'; return 0; }
+      fi
+      summarize_local "$transcript" "$model_path" ;;
+  esac
+}
+
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  case "${1:-}" in
+    --list-models) MODEL_CATALOG ;;
+    --download)    download_model "${2:?model id required}" ;;
+    *)             summarize "${1:?transcript path required}" ;;
+  esac
+fi

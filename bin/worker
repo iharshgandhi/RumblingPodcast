@@ -1,0 +1,162 @@
+#!/bin/bash
+# RumblingPodcast worker: discover -> download -> transcribe -> summarize ->
+# publish -> retain. Runs continuously at low priority so Pi-hole's DNS
+# resolution always wins the CPU.
+#
+# Author: Harsh Gandhi (harshgandhi.com) / Buho Smart Tools (buho.co.in)
+
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
+# discover provides fetch_captions; fetch_audio provides download_audio,
+# make_wav and transcribe_whisper.
+source "$(dirname "${BASH_SOURCE[0]}")/discover"
+source "$(dirname "${BASH_SOURCE[0]}")/fetch_audio"
+
+VIDEO_TMP="$RP_DATA/video"
+
+process_video() {
+  local id="$1" title="$2" dur="$3" pubdate="$4" relurl="$5"
+  local url="https://rumble.com${relurl}"
+  local base="$id"
+
+  if [ -f "$RP_DATA/meta/${base}.meta" ] && [ "$(cfg skip_existing 1)" = "1" ]; then
+    log_info "already processed: $title"
+    return 0
+  fi
+
+  log_info "=== processing: $title (${dur}s) ==="
+
+  # ---- 1. transcription: prefer Rumble's own captions, fall back to whisper --
+  local transcript=""
+  local src="captions"
+  if [ "$(cfg use_captions 1)" = "1" ]; then
+    transcript="$(fetch_captions "$url" "$RP_DATA/transcripts" "$base" 2>/dev/null)" \
+      || transcript=""
+  fi
+  if [ -z "$transcript" ]; then
+    src="whisper"
+    log_info "no captions available; falling back to whisper.cpp transcription"
+    local audio
+    audio="$(download_audio "$url" "$base" "$RP_DATA/audio")" || { log_error "download failed, skipping"; return 1; }
+    local wav="$VIDEO_TMP/${base}.wav"
+    mkdir -p "$VIDEO_TMP"
+    if make_wav "$audio" "$wav"; then
+      transcript="$(transcribe_whisper "$wav" "$RP_DATA/transcripts" "$base")" || {
+        log_error "transcription failed"; rm -f "$wav"; return 1; }
+    else
+      log_error "wav conversion failed"; rm -f "$wav"; return 1
+    fi
+    # Transcript complete => the working audio copy is no longer needed.
+    # (It is re-downloaded if the retention sweep later removes it.)
+    rm -f "$wav"
+  fi
+  [ -s "$transcript" ] || { log_error "no transcript produced"; return 1; }
+  log_info "transcript ready via $src: $(wc -w < "$transcript" | tr -d ' ') words"
+
+  # ---- 2. audio: always ensure an m4a exists for the podcast enclosure -----
+  local audio="$RP_DATA/audio/${base}.m4a"
+  if [ ! -s "$audio" ]; then
+    audio="$(download_audio "$url" "$base" "$RP_DATA/audio")" || {
+      log_warn "no audio for enclosure; episode will be transcript-only"; audio=""; }
+  fi
+
+  # ---- 3. summary ----------------------------------------------------------
+  local summary="$RP_DATA/summaries/${base}.txt"
+  "$RP_BIN/summarize" "$transcript" > "$summary.tmp" 2>/dev/null \
+    && mv "$summary.tmp" "$summary" || {
+      rm -f "$summary.tmp"
+      { printf 'Summary unavailable.\n\nTranscript kept at:\n%s\n' "$transcript"; } > "$summary"
+    }
+  log_info "summary written ($(wc -w < "$summary" | tr -d ' ') words)"
+
+  # ---- 4. metadata ---------------------------------------------------------
+  cat > "$RP_DATA/meta/${base}.meta" <<EOF
+ID=$base
+TITLE=$title
+DUR=$dur
+PUBDATE=$pubdate
+URL=$relurl
+TRANSCRIPT_SRC=$src
+CREATED=$(now_epoch)
+EOF
+
+  # ---- 5. publish: regenerate the feed after every episode -----------------
+  "$RP_BIN/gen_feed" >/dev/null 2>&1 && log_info "feed updated"
+  return 0
+}
+
+retention_sweep() {
+  local days; days="$(cfg retention_days 30)"
+  [ "$days" -gt 0 ] 2>/dev/null || return 0
+  local cutoff; cutoff="$(subtract_days "$(now_epoch)" "$days")"
+  log_info "retention sweep: removing media older than ${days}d"
+  local removed=0
+  for m in "$RP_DATA/meta"/*.meta; do
+    [ -e "$m" ] || continue
+    local id created
+    id="$(sed -n 's/^ID=//p' "$m" | head -1)"
+    created="$(sed -n 's/^CREATED=//p' "$m" | head -1)"
+    [ -n "$id" ] || continue
+    if [ -n "$created" ] && [ "$created" -lt "$cutoff" ]; then
+      rm -f "$RP_DATA/audio/${id}.m4a" "$RP_DATA/video/${id}".* "$RP_DATA/summaries/${id}.txt"
+      rm -f "$m"
+      log_info "removed media + summary for $id (transcript kept)"
+      removed=$((removed+1))
+    fi
+  done
+  # Stray temp files, e.g. from an interrupted run.
+  rm -rf "$RP_DATA/audio/.tmp" 2>/dev/null
+  rm -f "$RP_DATA/video"/*.wav 2>/dev/null
+  [ "$removed" -gt 0 ] && "$RP_BIN/gen_feed" >/dev/null 2>&1 && log_info "feed refreshed after retention ($removed removed)"
+  return 0
+}
+
+main() {
+  acquire_lock || exit 0
+  log_info "worker starting (pid $$), Pi-hole priority preserved via nice/ionice"
+
+  # renice ourselves so DNS always outranks us.
+  renice -n 19 -p $$ >/dev/null 2>&1 || true
+  ionice -c 3 -p $$ >/dev/null 2>&1 || true
+
+  local interval; interval="$(cfg scan_interval_hours 6)"
+  local first=1
+  while :; do
+    [ "$first" -eq 1 ] || throttle "$(cfg loop_sleep 1800)"
+    first=0
+
+    local channels; channels="$(cfg channels usawatchdog)"
+    for ch in $channels; do
+      local days; days="$(cfg max_age_days 7)"
+      log_info "scanning channel: $ch (last ${days}d)"
+      while IFS=$'\t' read -r epoch dur upload title relurl; do
+        [ -n "$relurl" ] || continue
+        local id; id="$(printf '%s' "$relurl" | sed -n 's#^/\(v[a-z0-9]*\)-.*#\1#p')"
+        [ -n "$id" ] || id="$(safe_name "$relurl")"
+        process_video "$id" "$title" "$dur" "$epoch" "$relurl" \
+          && throttle "$(cfg sleep_between_videos 20)"
+      done < <("$RP_BIN/discover" "$ch" "$days" 2>/dev/null)
+    done
+
+    retention_sweep
+
+    log_info "cycle complete; sleeping ${interval}h"
+    sleep "$(( interval * 3600 ))"
+  done
+}
+
+case "${1:-}" in
+  --once)
+    acquire_lock || exit 0
+    channels="$(cfg channels usawatchdog)"
+    for ch in $channels; do
+      while IFS=$'\t' read -r epoch dur upload title relurl; do
+        [ -n "$relurl" ] || continue
+        id="$(printf '%s' "$relurl" | sed -n 's#^/\(v[a-z0-9]*\)-.*#\1#p')"
+        process_video "$id" "$title" "$dur" "$epoch" "$relurl"
+      done < <("$RP_BIN/discover" "$ch" "$(cfg max_age_days 7)" 2>/dev/null)
+    done
+    retention_sweep
+    ;;
+  --retention) acquire_lock || exit 0; retention_sweep ;;
+  *) main ;;
+esac

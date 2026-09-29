@@ -1,0 +1,167 @@
+#!/bin/bash
+# Discover recent videos for a Rumble channel.
+#
+# Why this exists: yt-dlp's RumbleChannel extractor returns only 1 entry for
+# most channels, and Rumble publishes no RSS feed. The channel HTML does embed
+# a <script type="application/json"> block containing the full video list, so we
+# curl the page and read that with jq. No headless browser, no Python.
+#
+# Output: TSV  ->  epoch \t duration \t upload_date \t title \t url
+#
+# Author: Harsh Gandhi (harshgandhi.com) / Buho Smart Tools (buho.co.in)
+
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
+
+UA='Mozilla/5.0 (X11; Linux aarch64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+
+# Accepts either a bare slug (usawatchdog), a channel URL, or the
+# legacy subscriptions?creator=_cNNNNN form.
+normalize_channel() {
+  local c="$1"
+  # Strip scheme and host so only the path/id remains. Use @ as the sed
+  # delimiter because URLs are full of slashes.
+  c="$(printf '%s' "$c" | sed -e 's#^[a-zA-Z][a-zA-Z0-9+.-]*://##' -e 's#^[^/]*/##' -e 's#/$##')"
+  case "$c" in
+    *creator=*)
+      local id; id="$(printf '%s' "$c" | sed -n 's#.*creator=\(_c\{0,1\}[0-9]*\).*#\1#p')"
+      [ -n "$id" ] && c="$(printf '%s' "$id" | sed 's/^_c//')" ;;
+    c/c-*|_c*)
+      c="$(printf '%s' "$c" | sed -e 's#^c/c-##' -e 's#^_c##' -e 's#/.*##')" ;;
+    c/*)
+      c="$(printf '%s' "$c" | sed -e 's#^c/##' -e 's#/.*##')" ;;
+  esac
+  printf '%s' "$c" | tr -d '/'
+}
+
+fetch_channel_feed() {
+  # $1 = channel slug (or numeric channel id), $2 = destination file
+  local slug="$1" dest="$2" tmp page code
+  tmp="$(mktemp)"
+
+  # Numeric ids (from ...?creator=_c732873) resolve via the numeric channel URL.
+  local base
+  case "$slug" in
+    ''|*[!0-9]*) base="https://rumble.com/c/${slug}/videos" ;;
+    *)            base="https://rumble.com/c/c-${slug}/videos" ;;
+  esac
+
+  # Rumble rate-limits and occasionally returns a challenge page, so retry a few
+  # times before giving up. A transient failure here would otherwise silently
+  # skip a whole scan cycle.
+  local attempt
+  for attempt in 1 2 3; do
+    page="$base"
+    code="$(curl -sL --max-time 45 --compressed \
+        --retry 2 --retry-delay 3 \
+        -A "$UA" \
+        -H 'accept: text/html,application/xhtml+xml' \
+        -H 'accept-language: en-US,en;q=0.9' \
+        "$page" -o "$tmp" -w '%{http_code}')"
+    if [ "$code" = "200" ] && grep -q 'object_type' "$tmp"; then
+      break
+    fi
+    page="https://rumble.com/c/${slug}"
+    curl -sL --max-time 45 --compressed --retry 2 --retry-delay 3 \
+         -A "$UA" "$page" -o "$tmp" >/dev/null
+    if grep -q 'object_type' "$tmp"; then
+      break
+    fi
+    log_warn "channel fetch attempt $attempt failed (http=$code), retrying..."
+    sleep $(( attempt * 5 ))
+  done
+
+  # Pull the embedded JSON island out of the HTML. The <script> tag sits on its
+  # own line and the JSON payload follows on the next line(s), so match across
+  # newlines and keep only the first block.
+  awk '
+    /<script type="application\/json">/ { grab=1; next }
+    grab && /<\/script>/ { exit }
+    grab { print }
+  ' "$tmp" > "$dest.raw" 2>/dev/null
+  [ -s "$dest.raw" ] || { rm -f "$tmp"; return 1; }
+  jq -c 'if type=="object" then (.items // []) elif type=="array" then . else [] end' \
+     "$dest.raw" > "$dest.items" 2>/dev/null || { rm -f "$tmp"; return 1; }
+  rm -f "$tmp" "$dest.raw"
+  return 0
+}
+
+# Echo TSV for videos newer than $2 (epoch), newest first.
+list_recent_videos() {
+  local channel="$1" since_epoch="$2"
+  local slug tmpitems
+  slug="$(normalize_channel "$channel")"
+  [ -z "$slug" ] && { log_error "cannot parse channel: $channel"; return 1; }
+
+  tmpitems="$(mktemp)"
+  if ! fetch_channel_feed "$slug" "$tmpitems"; then
+    log_error "failed to read channel feed for: $channel (slug=$slug)"
+    rm -f "$tmpitems"
+    return 1
+  fi
+
+  jq -r --argjson since "${since_epoch:-0}" '
+    .[]
+    | select(.object_type == "video")
+    | select(.upload_date != null)
+    | ( .upload_date | sub("\\+00:00$"; "Z") | fromdateiso8601 ) as $epoch
+    | select($epoch >= $since)
+    | [ ($epoch|tostring),
+        (.duration // 0 | tostring),
+        .upload_date,
+        (.title // "Untitled"),
+        (.relative_url // .url // "")
+      ] | @tsv
+  ' "$tmpitems.items" 2>/dev/null | sort -rn -k1,1
+
+  rm -f "$tmpitems.items"
+  return 0
+}
+
+# Resolve a single video's metadata as JSON on stdout.
+video_metadata() {
+  local url="$1"
+  "$RP_BIN/yt-dlp" -J --skip-download --no-warnings "$url" 2>/dev/null
+}
+
+# Download Rumble's auto-generated English captions as plain text.
+# Returns 0 and prints the path on success; 1 when no captions exist.
+fetch_captions() {
+  local url="$1" outdir="$2" base="$3"
+  mkdir -p "$outdir"
+  # en-auto is the auto-caption track Rumble generates for every video.
+  # (yt-dlp self-extracts ~40MB into TMPDIR on every run, so never write its
+  # scratch here; common.sh redirects TMPDIR to the app's own run dir.)
+  "$RP_BIN/yt-dlp" --skip-download --no-warnings --write-subs --write-auto-subs \
+      --sub-langs 'en.*,en' --sub-format vtt \
+      -o "$outdir/${base}.%(ext)s" "$url" >/dev/null 2>&1
+  # yt-dlp names it <base>.en-auto.vtt
+  local f
+  f="$(ls "$outdir"/${base}*.vtt 2>/dev/null | head -1)"
+  if [ -z "$f" ]; then
+    return 1
+  fi
+  # Strip VTT cue markup down to readable text with sentence-ish line breaks.
+  awk '
+    /^[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3} -->/ { next }
+    /^WEBVTT/ { next }
+    /^NOTE/ { next }
+    /^[0-9]+$/ { next }
+    /^[[:space:]]*$/ { print ""; next }
+    { gsub(/<[^>]*>/, ""); if (length($0)) print }
+  ' "$f" | sed '/^[[:space:]]*$/N;/^\n$/D' | sed 's/[[:space:]]\+/ /g' > "$outdir/${base}.txt"
+  rm -f "$f"
+  [ -s "$outdir/${base}.txt" ] || return 1
+  printf '%s' "$outdir/${base}.txt"
+  return 0
+}
+
+main() {
+  local channel="$1" days="$2"
+  local since
+  since="$(subtract_days "$(now_epoch)" "$days")"
+  list_recent_videos "$channel" "$since"
+}
+
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  main "$@"
+fi

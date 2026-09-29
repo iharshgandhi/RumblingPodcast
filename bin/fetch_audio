@@ -1,0 +1,95 @@
+#!/bin/bash
+# Download audio only for a Rumble video, never video.
+#
+# Rumble exposes a genuine audio-only stream (vcodec=none, acodec=aac), so the
+# video ladder is never touched. Only if a video has no audio-only stream do we
+# fall back to downloading the lowest-resolution video and extracting the audio
+# with ffmpeg - immediately afterwards.
+#
+# Prints the path of the resulting .m4a on stdout.
+#
+# Author: Harsh Gandhi (harshgandhi.com) / Buho Smart Tools (buho.co.in)
+
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
+
+download_audio() {
+  local url="$1" base="$2" outdir="${3:-$RP_DATA/audio}"
+  mkdir -p "$outdir"
+  local ytdlp="$RP_BIN/yt-dlp"
+  [ -x "$ytdlp" ] || { log_error "yt-dlp missing at $ytdlp"; return 1; }
+
+  local tmp="$outdir/.${base}.part"
+  mkdir -p "$outdir/.tmp"; rm -f "$outdir/.tmp/${base}".*
+
+  log_info "downloading audio-only: $base"
+  # Rumble exposes a real audio-only progressive stream (audio-192p, ~66MB for
+  # 48min). Select it explicitly; vcodec=none is kept as a fallback selector.
+  if "$ytdlp" --no-warnings --no-playlist \
+       --no-progress \
+       -f 'audio-192p/bestaudio[acodec!=none]/vcodec=none' \
+       --extract-audio --audio-format m4a --audio-quality 0 \
+       -o "$outdir/.tmp/${base}.%(ext)s" "$url" >/dev/null 2>&1; then
+    local f; f="$(ls "$outdir/.tmp/${base}".m4a 2>/dev/null | head -1)"
+    if [ -n "$f" ] && [ -s "$f" ]; then
+      mv "$f" "$outdir/${base}.m4a"
+      rm -f "$outdir/.tmp/${base}".*
+      log_info "audio ready: ${base}.m4a ($(du -h "$outdir/${base}.m4a" | cut -f1))"
+      printf '%s' "$outdir/${base}.m4a"; return 0
+    fi
+  fi
+
+  # Fallback: lowest-quality video stream, then extract audio immediately.
+  log_warn "no audio-only stream for $base; falling back to video+extract"
+  if "$ytdlp" --no-warnings --no-playlist --no-progress \
+       -f 'worstvideo*+worstaudio/worst' \
+       -o "$outdir/.tmp/${base}.v.%(ext)s" "$url" >/dev/null 2>&1; then
+    local v; v="$(ls "$outdir/.tmp/${base}.v".* 2>/dev/null | head -1)"
+    if [ -n "$v" ] && [ -s "$v" ]; then
+      "$RP_BIN/ffmpeg" -nostdin -loglevel error -y -i "$v" -vn -c:a copy \
+        "$outdir/${base}.m4a" </dev/null 2>/dev/null || {
+        "$RP_BIN/ffmpeg" -nostdin -loglevel error -y -i "$v" -vn -ac 2 -b:a 64k \
+          "$outdir/${base}.m4a" </dev/null 2>/dev/null; }
+      rm -f "$v"          # delete the video immediately, per requirement
+      if [ -s "$outdir/${base}.m4a" ]; then
+        log_info "extracted audio: ${base}.m4a"
+        printf '%s' "$outdir/${base}.m4a"; return 0
+      fi
+    fi
+  fi
+  rm -f "$outdir/.tmp/${base}".*
+  log_error "audio download failed: $url"
+  return 1
+}
+
+# Transcribe to 16k mono WAV via ffmpeg (input for whisper.cpp).
+make_wav() {
+  local audio="$1" wav="$2"
+  "$RP_BIN/ffmpeg" -nostdin -loglevel error -y -i "$audio" \
+    -ar 16000 -ac 1 -c:a pcm_s16le "$wav" </dev/null 2>/dev/null
+}
+
+# Run whisper.cpp; prints transcript path on success.
+transcribe_whisper() {
+  local wav="$1" outdir="$2" base="$3"
+  local whisper="$RP_BIN/whisper-cli"
+  [ -x "$whisper" ] || { log_error "whisper-cli missing at $whisper"; return 1; }
+  local model="$RP_MODEL_DIR/$(cfg whisper_model_file ggml-tiny.en.bin)"
+  if [ ! -s "$model" ]; then
+    log_warn "whisper model missing: $model"
+    model="$RP_MODEL_DIR/$(cfg whisper_model_alt_file ggml-base.en.bin)"
+    [ -s "$model" ] || return 1
+  fi
+  log_info "transcribing with $(basename "$model") (this can take a while)"
+  mkdir -p "$outdir"
+  # -otxt writes <out>.txt; -osrt gives timed cues for reference.
+  "$whisper" -m "$model" -f "$wav" -l auto -otxt -osrt -of "$outdir/${base}" \
+     -t "$(cfg whisper_threads 4)" -np 2>/dev/null >/dev/null
+  if [ -s "$outdir/${base}.txt" ]; then
+    printf '%s' "$outdir/${base}.txt"; return 0
+  fi
+  return 1
+}
+
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  download_audio "$@"
+fi

@@ -1,0 +1,33 @@
+[Unit]
+Description=RumblingPodcast feed server (RSS + audio on the configured port)
+Documentation=https://github.com/harshgandhi/RumblingPodcast
+After=network.target
+
+[Service]
+Type=simple
+# Standard-library-only static server. Correct MIME types (audio/mp4) and HTTP
+# Range support, both of which podcast clients require and busybox httpd lacks.
+# Port 8088 only; Pi-hole keeps 80/443/53.
+ExecStart=/usr/bin/python3 /opt/rumblingpodcast/bin/serve_feed.py -p 8088 -d /opt/rumblingpodcast/data
+Restart=always
+RestartSec=15
+
+# Never compete with Pi-hole's DNS work.
+Nice=15
+IOSchedulingClass=idle
+
+# Hardening: this process only ever needs to read the data directory.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/opt/rumblingpodcast/data
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target
