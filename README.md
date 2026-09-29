@@ -163,6 +163,16 @@ a small tmpfs (often 30 MB). `yt-dlp` self-extracts ~40 MB per run. The app
 redirects `TMPDIR` to `/opt/rumblingpodcast/run/tmp`; if you hit this, check
 that directory is writable.
 
+**Deploying from macOS with `tar | ssh`** — macOS `tar` embeds AppleDouble
+(`._*`) and `PaxHeader` entries, which the remote shell tries to execute and
+garbles the transfer. Either deploy with `COPYFILE_DISABLE=1` or use `scp -r`:
+
+```bash
+COPYFILE_DISABLE=1 tar cf - bin lib config systemd | ssh pi 'tar xf - -C /opt/rumblingpodcast'
+# or simply
+scp -r bin lib config systemd pi:/opt/rumblingpodcast/
+```
+
 **No episodes appear** — the worker only picks up videos newer than
 `max_age_days` that have no `.meta` file yet. `sudo rp-ctl run-once` forces a
 pass.
