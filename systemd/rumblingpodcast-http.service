@@ -1,14 +1,15 @@
 [Unit]
-Description=RumblingPodcast feed server (RSS + audio on the configured port)
+Description=RumblingPodcast feed server and web UI
 Documentation=https://github.com/iharshgandhi/RumblingPodcast
 After=network.target
 
 [Service]
 Type=simple
-# Standard-library-only static server. Correct MIME types (audio/mp4) and HTTP
-# Range support, both of which podcast clients require and busybox httpd lacks.
-# Port 8088 only; Pi-hole keeps 80/443/53.
-ExecStart=/usr/bin/python3 /opt/rumblingpodcast/bin/serve_feed.py -p 8088 -d /opt/rumblingpodcast/data
+# Standard-library-only server. Correct MIME types (audio/mp4) and HTTP Range
+# support, both of which podcast clients require and busybox httpd lacks.
+# The port comes from serve_port in rp.conf, so a port chosen at install time
+# stays put; -p is only a fallback. Pi-hole keeps 53/80/443.
+ExecStart=/usr/bin/python3 /opt/rumblingpodcast/bin/serve_feed.py -d /opt/rumblingpodcast/data -c /opt/rumblingpodcast/config/rp.conf -p 8088
 Restart=always
 RestartSec=15
 
@@ -16,12 +17,19 @@ RestartSec=15
 Nice=15
 IOSchedulingClass=idle
 
-# Hardening: this process only ever needs to read the data directory.
+# Hardening. The service runs as the app owner (not root) and needs write
+# access to exactly one thing: config/rp.conf, because the web UI edits it.
+# Everything else stays read-only.
+User=__RP_USER__
+Group=__RP_USER__
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
+# Data is served, never written.
 ReadOnlyPaths=/opt/rumblingpodcast/data
+# The config directory is writable so settings and the API key can be saved.
+ReadWritePaths=/opt/rumblingpodcast/config
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true

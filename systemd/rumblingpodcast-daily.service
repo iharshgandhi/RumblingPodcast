@@ -1,0 +1,18 @@
+[Unit]
+Description=RumblingPodcast nightly run
+Documentation=https://github.com/iharshgandhi/RumblingPodcast
+After=network-online.target
+
+[Service]
+Type=oneshot
+# Runs as the app owner, not root, and stays out of Pi-hole's way.
+User=__RP_USER__
+Group=__RP_USER__
+WorkingDirectory=/opt/rumblingpodcast
+Environment=TMPDIR=/opt/rumblingpodcast/run/tmp
+ExecStart=/opt/rumblingpodcast/bin/worker --once
+Nice=19
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=multi-user.target

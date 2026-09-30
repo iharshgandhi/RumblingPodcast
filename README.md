@@ -58,18 +58,36 @@ curl -fsSL https://raw.githubusercontent.com/iharshgandhi/RumblingPodcast/main/i
 That's it. The installer will:
 
 - check your system is suitable,
-- ask three simple questions,
+- ask a few simple questions,
 - install everything it needs,
 - set up a nightly schedule,
 - print the feed URL for your podcast app.
 
-The three questions:
+The questions:
 
 | Question | What it means |
 |---|---|
 | **Which channels?** | Paste a Rumble channel URL or name. Separate several with spaces. |
 | **Summaries?** | `free AI via OpenRouter` (recommended), `no AI` (lightest), or `local AI model` (needs lots of RAM). |
 | **What time nightly?** | e.g. `02:00`. A systemd timer does the scheduling — you never touch cron. |
+| **Which port?** | The port in your feed URL, e.g. `8088`. See below. |
+
+### About the port
+
+You pick the port once, at install, and **it stays that way.** The installer
+reads the port already in your config first, so re-running it later — to
+upgrade, or to change something else — will not quietly move a feed your
+podcast app has already subscribed to. The same applies to reboots: the server
+reads the port from your config on every start, so it comes back on the same
+port every time.
+
+The installer refuses ports that are already in use and protects Pi-hole's
+ports (`53`, `80`, `443`) so it can't break your DNS. It also leaves `8080` and
+`8081` alone, since those are what Pi-hole's own web interface uses.
+
+If you genuinely need to change it later, change it in the web page's
+**Settings** tab and run `sudo rp restart`. Podcast apps have to be told about
+the new URL, so treat it as a deliberate move rather than a routine setting.
 
 It finishes by printing something like:
 
@@ -95,15 +113,56 @@ transcripts, artwork and a basic extractive summary.
 
 ---
 
-## Add it to Apple Podcasts
+## The web page — everything without touching the terminal
 
-1. Open **Apple Podcasts** on your iPhone, iPad or Mac.
-2. **Libraries** → **+** (top right) → **Add a Podcast by URL**.
-3. Paste the feed URL the installer printed.
-4. Tap **Add Podcast**. Done.
+Open `http://<your-pi-address>:<port>` in any browser. The installer prints the
+exact address, and `rp status` shows it later.
 
-Transcripts appear automatically — tap the transcript button on the player and
-scroll; tap a line to jump there.
+![The Feeds tab: one card per channel, with a Copy button next to each feed URL](docs/screenshot-feeds.png)
+
+### Copy a feed URL
+
+Each channel has its own feed URL in a box, with a **Copy** button beside it.
+Press **Copy**, then in Apple Podcasts go to **Libraries** → **+** → **Add a
+Podcast by URL** and paste.
+
+The page is served over plain HTTP on your own network, so browsers treat it as
+an insecure origin and block the modern clipboard API. The button handles this:
+it uses the clipboard where available and otherwise selects the text and tells
+you to press Ctrl+C. Either way you get the URL without typing it by hand.
+
+### Change settings in the browser
+
+Everything the config file supports is editable here — retention, how often it
+runs, whether it summarises, podcast title and author, and so on.
+
+![The Settings tab: every config option, editable, each with an explanation](docs/screenshot-settings.png)
+
+![The Channels section of the Settings tab: add and remove Rumble channels](docs/screenshot-settings-channels.png)
+
+Changes save the moment you press **Save changes**, and a timestamped backup of
+the previous file is kept each time. If you break something, the terminal's
+`rp status` and `rp doctor` still work, and the backups are in
+`/opt/rumblingpodcast/config/`.
+
+Changing the **port** or the **feed base URL** needs a restart to take effect —
+the page tells you to run `sudo rp restart`.
+
+### The OpenRouter key
+
+The key can be set or replaced in the browser, but it is **never displayed
+back to you**. You can see that one is saved; you cannot read it out of the
+page, and it is not sent to the browser in any form.
+
+![The API key tab: the key can be replaced, but it is never shown](docs/screenshot-apikey.png)
+
+Worth knowing: this is a small tool with no login, running on your own
+network. Anyone who can reach the port can change your settings. Keep it on a
+trusted home network and don't port-forward it. If you ever need to, set up a
+tunnel with a login rather than exposing the port directly.
+
+Transcripts appear automatically in Apple Podcasts — tap the transcript button
+on the player and scroll; tap a line to jump there.
 
 ### Off-LAN listening
 

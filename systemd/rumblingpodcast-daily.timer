@@ -1,0 +1,14 @@
+[Unit]
+Description=Run RumblingPodcast nightly
+
+[Timer]
+# The time comes from run_time in rp.conf; the installer rewrites this unit
+# whenever that value changes, so the schedule and the config never disagree.
+OnCalendar=*-*-* 02:00:00
+# Run immediately after a missed window (laptop closed, power off) instead of
+# silently skipping a day.
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

@@ -100,14 +100,40 @@ c_info "memory: ${TOTAL_MB}MB total, about ${AVAIL_MB}MB free"
 
 # Our port must never collide with an existing listener (pi-hole uses 80/443/53).
 PORTS_IN_USE="$(ss -tuln 2>/dev/null | awk '{print $5}' | sed 's/.*://' | sort -u)"
-pick_port() {
-  local p
-  for p in 8088 8090 8080 9090 8099; do
-    echo "$PORTS_IN_USE" | grep -qx "$p" || { printf '%s' "$p"; return 0; }
-  done
-  printf '8088'
+
+# Port validity, and whether something is already listening on it.
+port_in_use() { echo "$PORTS_IN_USE" | grep -qx "$1"; }
+port_is_pi_hole() {
+  case "$1" in
+    53|80|443) return 0 ;;
+    *)          return 1 ;;
+  esac
 }
-SERVE_PORT="$(pick_port)"
+port_valid() {
+  case "$1" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  [ "$1" -ge 1024 ] && [ "$1" -le 65535 ]
+}
+
+# A port already recorded in an existing install always wins, so re-running the
+# installer never silently moves a feed people have already subscribed to.
+if [ -f "$RP_ROOT/config/rp.conf" ]; then
+  EXISTING_PORT="$(sed -n 's/^[[:space:]]*serve_port[[:space:]]*=[[:space:]]*//p' \
+                    "$RP_ROOT/config/rp.conf" 2>/dev/null | tail -1 | tr -d '[:space:]')"
+  if port_valid "$EXISTING_PORT"; then
+    SERVE_PORT="$EXISTING_PORT"
+  fi
+fi
+
+if ! port_valid "$SERVE_PORT"; then
+  for p in 8088 8090 8080 9090 8099; do
+    port_valid "$p" || continue
+    port_in_use "$p" && continue
+    SERVE_PORT="$p"; break
+  done
+  port_valid "$SERVE_PORT" || SERVE_PORT=8088
+fi
 
 if command -v pihole >/dev/null; then
   c_ok "pi-hole detected — it will not be touched"
@@ -122,6 +148,7 @@ LOCAL_MODEL="${RP_MODEL_LOCAL:-}"
 RETENTION="${RP_RETENTION_DAYS:-30}"
 MAXAGE="${RP_MAX_AGE_DAYS:-7}"
 RUN_TIME="${RP_RUN_TIME:-02:00}"
+SERVE_PORT="${RP_SERVE_PORT:-}"
 
 c_head "Let's set you up (about 2 minutes)"
 c_info "Press Enter to accept the value shown in [brackets]."
@@ -167,7 +194,40 @@ if [ "$SUMMARIZE" = "local" ]; then
 fi
 
 c_info ""
-c_info "3) When should it look for new videos?"
+c_info "3) Which port should the podcast feed be served on?"
+c_info "   This is the number in the feed URL. It is saved permanently, so"
+c_info "   re-running this installer later will not change it."
+if port_valid "$EXISTING_PORT"; then
+  c_ok "you already chose port ${EXISTING_PORT} - keeping it"
+  SERVE_PORT="$EXISTING_PORT"
+fi
+while :; do
+  ask SERVE_PORT "port (1024-65535, never 53/80/443 which pi-hole uses)" "$SERVE_PORT"
+  if ! port_valid "$SERVE_PORT"; then
+    c_err "'${SERVE_PORT}' is not a usable port (use a number 1024-65535)"
+    continue
+  fi
+  if port_is_pi_hole "$SERVE_PORT"; then
+    c_err "port ${SERVE_PORT} belongs to pi-hole - choose another"
+    continue
+  fi
+  # Already served by us is fine; anything else already listening is not.
+  if port_in_use "$SERVE_PORT" && ! ss -tuln 2>/dev/null \
+       | grep -q "rumblingpodcast"; then
+    c_warn "something is already listening on port ${SERVE_PORT}"
+    if [ "$NONINTERACTIVE" != 1 ]; then
+      read -r -p "    use it anyway? [y/N]: " ok || true
+      case "${ok:-n}" in y|Y) ;; *) continue ;; esac
+    else
+      continue
+    fi
+  fi
+  break
+done
+c_ok "port ${SERVE_PORT} will be saved permanently"
+
+c_info ""
+c_info "4) When should it look for new videos?"
 c_info "   A systemd timer handles this — you never touch cron."
 ask RUN_TIME "time of day, 24-hour, your local time" "$RUN_TIME"
 
@@ -256,10 +316,16 @@ c_ok "channels: $(get_conf channels)"
 
 # ---- systemd ------------------------------------------------------------
 c_ok "setting up the schedule (systemd timer — you never touch cron)"
+# Both units need the run-as user substituted in.
 sed "s/__RP_USER__/$APP_USER/g" \
   "$RP_ROOT/systemd/rumblingpodcast-worker.service" \
   > /etc/systemd/system/rumblingpodcast-worker.service
-cp "$RP_ROOT/systemd/rumblingpodcast-http.service" /etc/systemd/system/
+sed "s/__RP_USER__/$APP_USER/g" \
+  "$RP_ROOT/systemd/rumblingpodcast-http.service" \
+  > /etc/systemd/system/rumblingpodcast-http.service
+# The web UI edits rp.conf, so that one file must be writable by the service.
+chown "$APP_USER:$APP_USER" "$CONF" 2>/dev/null || true
+chmod 600 "$CONF"
 
 cat > /etc/systemd/system/rumblingpodcast-daily.service <<UNIT
 [Unit]
