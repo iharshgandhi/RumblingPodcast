@@ -1,4 +1,13 @@
 #!/bin/bash
+# RumblingPodcast - https://github.com/iharshgandhi/RumblingPodcast
+# Copyright (C) 2026 Harsh Gandhi (harshgandhi.com) / Buho Smart Tools (buho.co.in)
+#
+# Licensed under the GNU General Public License v3.0 or later.
+# This is an experimental project provided "AS IS", with NO WARRANTY and no
+# liability. It contains no copyrighted material and no circumvention code.
+# See DISCLAIMER.md. You are responsible for using it lawfully.
+#
+#!/bin/bash
 # rp-ctl - control RumblingPodcast: install, enable, disable, status, uninstall.
 #
 # Deliberately never touches Pi-hole's ports or services. Everything lives under

@@ -1,4 +1,13 @@
 #!/bin/bash
+# RumblingPodcast - https://github.com/iharshgandhi/RumblingPodcast
+# Copyright (C) 2026 Harsh Gandhi (harshgandhi.com) / Buho Smart Tools (buho.co.in)
+#
+# Licensed under the GNU General Public License v3.0 or later.
+# This is an experimental project provided "AS IS", with NO WARRANTY and no
+# liability. It contains no copyrighted material and no circumvention code.
+# See DISCLAIMER.md. You are responsible for using it lawfully.
+#
+#!/bin/bash
 # RumblingPodcast - shared helpers
 # Author: Harsh Gandhi (harshgandhi.com) / Buho Smart Tools (buho.co.in)
 
@@ -33,9 +42,11 @@ cfg() {
 
 log() {
   local level="$1"; shift
+  # Log to stderr, never stdout: functions like openrouter's or_free_models emit
+  # their result on stdout and are consumed with mapfile/read, so a stray log
+  # line would corrupt the value being read.
   printf '%s [%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$level" "$*" \
-    | tee -a "$RP_LOG/rp.log" >/dev/null
-  printf '%s [%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$level" "$*"
+    | tee -a "$RP_LOG/rp.log" >&2
 }
 
 log_info() { log INFO "$@"; }

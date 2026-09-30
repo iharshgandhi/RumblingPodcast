@@ -45,18 +45,33 @@ llm_threads = 2
 # Words per chunk when summarizing a long transcript.
 llm_chunk_words = 1200
 
-# OpenRouter settings (used only when summarize = openrouter).
-model_remote = openai/gpt-4o-mini
+# --- OpenRouter (used only when summarize = openrouter) ---------------------
+# The model is chosen AUTOMATICALLY: bin/openrouter fetches the live model list,
+# keeps only models whose prompt AND completion price are exactly 0 (and which
+# carry no pricing overrides, so they cannot become billable mid-request),
+# ranks them by measured throughput, and fails over down the list on error.
+# A paid model is never selected. model_remote is kept only as an explicit
+# override; leave it empty to use automatic selection.
+model_remote =
 openrouter_key = sk-or-REPLACE_ME
 remote_max_chars = 60000
 remote_timeout = 180
+# How many free models to attempt before giving up.
+remote_max_tries = 5
+# How long a fetched model list stays cached (seconds). Default 6h.
+or_cache_ttl = 21600
+
+# --- No-AI summary ----------------------------------------------------------
+# When summarize = none, a cheap extractive summariser still picks the most
+# representative sentences so episode descriptions are never empty.
+extractive_sentences = 7
 
 # --- Serving ----------------------------------------------------------------
 # Port for the RSS feed + audio. Deliberately NOT 80/443, which Pi-hole owns.
 serve_port = 8088
 # Public base URL used inside feed.xml enclosures. Leave as-is for LAN-only
 # use; set to your tunnel/domain for off-LAN access.
-feed_base_url = http://192.168.1.200:8088
+feed_base_url = http://PI_IP:8088
 
 # --- Podcast metadata -------------------------------------------------------
 podcast_title = RumblingPodcast
@@ -65,6 +80,9 @@ podcast_author = Harsh Gandhi
 podcast_email = noreply@example.com
 podcast_language = en
 timezone = Asia/Kolkata
+
+# Download episode artwork (thumbnails) so podcast apps show a cover image.
+download_thumbnails = 1
 
 # --- Retention & scheduling -------------------------------------------------
 # Delete audio + summaries older than this many days. The RSS feed is rebuilt to

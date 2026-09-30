@@ -1,4 +1,13 @@
 #!/bin/bash
+# RumblingPodcast - https://github.com/iharshgandhi/RumblingPodcast
+# Copyright (C) 2026 Harsh Gandhi (harshgandhi.com) / Buho Smart Tools (buho.co.in)
+#
+# Licensed under the GNU General Public License v3.0 or later.
+# This is an experimental project provided "AS IS", with NO WARRANTY and no
+# liability. It contains no copyrighted material and no circumvention code.
+# See DISCLAIMER.md. You are responsible for using it lawfully.
+#
+#!/bin/bash
 # Discover recent videos for a Rumble channel.
 #
 # Why this exists: yt-dlp's RumbleChannel extractor returns only 1 entry for
@@ -128,20 +137,26 @@ video_metadata() {
 fetch_captions() {
   local url="$1" outdir="$2" base="$3"
   mkdir -p "$outdir"
-  # en-auto is the auto-caption track Rumble generates for every video.
   # (yt-dlp self-extracts ~40MB into TMPDIR on every run, so never write its
   # scratch here; common.sh redirects TMPDIR to the app's own run dir.)
   "$RP_BIN/yt-dlp" --skip-download --no-warnings --write-subs --write-auto-subs \
       --sub-langs 'en.*,en' --sub-format vtt \
       -o "$outdir/${base}.%(ext)s" "$url" >/dev/null 2>&1
-  # yt-dlp names it <base>.en-auto.vtt
+
   local f
   f="$(ls "$outdir"/${base}*.vtt 2>/dev/null | head -1)"
   if [ -z "$f" ]; then
     return 1
   fi
-  # Strip VTT cue markup down to readable text with sentence-ish line breaks.
-  awk '
+
+  # 1) Timestamped WebVTT, normalised and KEPT. Apple Podcasts reads this from
+  #    <podcast:transcript> and renders a scrollable transcript where tapping a
+  #    line seeks the player to that moment. Cue timing must be preserved.
+  normalise_vtt "$f" "$outdir/${base}.vtt"
+
+  # 2) Plain text for the episode description / summary input. Strip cue markup
+  #    and keep readable sentence-ish line breaks.
+  tr -d '\r' < "$f" | awk '
     /^[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3} -->/ { next }
     /^WEBVTT/ { next }
     /^NOTE/ { next }
@@ -149,10 +164,133 @@ fetch_captions() {
     /^[[:space:]]*$/ { print ""; next }
     { gsub(/<[^>]*>/, ""); if (length($0)) print }
   ' "$f" | sed '/^[[:space:]]*$/N;/^\n$/D' | sed 's/[[:space:]]\+/ /g' > "$outdir/${base}.txt"
+
+  # Remove the raw download, keep our normalised copies.
   rm -f "$f"
   [ -s "$outdir/${base}.txt" ] || return 1
   printf '%s' "$outdir/${base}.txt"
   return 0
+}
+
+# Rewrite a VTT so every cue is well-formed:
+#   - strip any HTML/inline tags except <v Speaker>
+#   - ensure timestamps are HH:MM:SS.mmm --> HH:MM:SS.mmm
+#   - drop empty cues and guarantee monotonic, non-overlapping timing so a
+#     podcast app seeking to a line lands on the right word.
+# Rewrite a WebVTT so every cue is well-formed and seekable.
+#
+#   - strips CRLF (Rumble serves Windows line endings, which otherwise break
+#     every timestamp comparison)
+#   - drops HTML/inline tags from cue text
+#   - forces HH:MM:SS.mmm --> HH:MM:SS.mmm
+#   - makes cue times monotonic and non-overlapping, so a podcast app seeking
+#     to a transcript line lands on the right word
+#
+# Written for mawk (Debian default), so no gawk-only extensions are used.
+normalise_vtt() {
+  local src="$1" dest="$2"
+  tr -d '\r' < "$src" \
+  | awk '
+    function tosec(t,   a, n) {
+      n = split(t, a, ":")
+      if (n == 3)      return a[1] * 3600 + a[2] * 60 + a[3]
+      if (n == 2)      return a[1] * 60 + a[2]
+      return -1
+    }
+    function fmt(x,   h, m) {
+      if (x < 0) x = 0
+      h = int(x / 3600); x = x - h * 3600
+      m = int(x / 60);   x = x - m * 60
+      return sprintf("%02d:%02d:%06.3f", h, m, x)
+    }
+    function emit() {
+      if (buf == "") return
+      print ""
+      print fmt(st) " --> " fmt(en)
+      print buf
+      buf = ""
+    }
+    function handle_timing(   a, b, p, q, sa, sb) {
+      p = index($0, "-->")
+      if (p == 0) return
+      a = substr($0, 1, p - 1)
+      b = substr($0, p + 3)
+      gsub(/^[ \t]+|[ \t]+$/, "", a)
+      gsub(/^[ \t]+|[ \t]+$/, "", b)
+      sub(/[ \t]+(position|align|line|size|vertical|region)[ \t]*:.*$/, "", b)
+      sa = tosec(a)
+      sb = tosec(b)
+      if (sa < 0 || sb < 0) { have = 0; return }
+      if (sb <= sa) sb = sa + 0.5
+      if (sa < prevEnd) sa = prevEnd
+      if (sb <= sa) sb = sa + 0.5
+      st = sa; en = sb; prevEnd = sb
+      have = 1
+      buf = ""
+    }
+    index($0, "-->") > 0 && index($0, ":") > 0 {
+      emit()
+      handle_timing()
+      next
+    }
+    $0 == "WEBVTT" { next }
+    $0 ~ /^NOTE/    { next }
+    $0 ~ /^[0-9]+$/ { next }
+    $0 == ""         { next }
+    {
+      if (!have) next
+      txt = $0
+      gsub(/<[^>]*>/, "", txt)
+      gsub(/[ \t]+/, " ", txt)
+      if (txt == "") next
+      buf = (buf == "" ? txt : buf " " txt)
+    }
+    END { if (have) emit() }
+  ' > "$dest.tmp"
+
+  { echo "WEBVTT"; sed '/./,$!d' "$dest.tmp"; } > "$dest"
+  rm -f "$dest.tmp"
+  [ -s "$dest" ]
+}
+
+# Download the episode thumbnail so podcast apps have artwork.
+# Prefers the largest image URL Rumble lists, then falls back to yt-dlp's
+# thumbnail field.
+fetch_thumbnail() {
+  local url="$1" dest="$2"
+  mkdir -p "$(dirname "$dest")"
+  local tmp="$dest.part" page cand candidates
+
+  # Pull every thumbnail URL out of the channel JSON island.
+  page="$(mktemp)"
+  curl -sL --max-time 30 --compressed -A "$UA" \
+    "https://rumble.com/c/$(normalize_channel "$url")/videos" -o "$page" 2>/dev/null
+  candidates="$(awk '
+    /<script type="application\/json">/ { grab=1; next }
+    grab && /<\/script>/ { exit }
+    grab { print }
+  ' "$page" 2>/dev/null | jq -r '(.items // [])[].thumb // empty' 2>/dev/null | grep '\.jpg$' | sort -u)"
+  rm -f "$page"
+
+  # Try each candidate until one lands and is big enough to be real artwork.
+  for cand in $candidates; do
+    if curl -sL --max-time 25 -o "$tmp" "$cand" 2>/dev/null \
+       && [ -s "$tmp" ] && [ "$(wc -c < "$tmp")" -gt 3000 ]; then
+      mv "$tmp" "$dest"
+      return 0
+    fi
+  done
+
+  # Fallback: ask yt-dlp for the thumbnail URL.
+  cand="$("$RP_BIN/yt-dlp" -J --skip-download --no-warnings "$url" 2>/dev/null \
+         | jq -r '.thumbnail // empty' 2>/dev/null)"
+  if [ -n "$cand" ]; then
+    curl -sL --max-time 25 -o "$tmp" "$cand" 2>/dev/null \
+      && [ -s "$tmp" ] && mv "$tmp" "$dest" && return 0
+  fi
+
+  rm -f "$tmp"
+  return 1
 }
 
 main() {

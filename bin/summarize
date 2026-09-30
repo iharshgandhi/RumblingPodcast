@@ -1,4 +1,13 @@
 #!/bin/bash
+# RumblingPodcast - https://github.com/iharshgandhi/RumblingPodcast
+# Copyright (C) 2026 Harsh Gandhi (harshgandhi.com) / Buho Smart Tools (buho.co.in)
+#
+# Licensed under the GNU General Public License v3.0 or later.
+# This is an experimental project provided "AS IS", with NO WARRANTY and no
+# liability. It contains no copyrighted material and no circumvention code.
+# See DISCLAIMER.md. You are responsible for using it lawfully.
+#
+#!/bin/bash
 # Summarize a transcript using one of three backends.
 #
 #   none        - no summary, just transcription (cheapest)
@@ -112,41 +121,55 @@ summarize_local() {
   printf '%s\n' "$final"
 }
 
+# Remote summarisation via OpenRouter. Delegates to bin/openrouter, which
+# discovers the free-tier model list, ranks it, and fails over automatically so
+# a paid model can never be selected.
 summarize_remote() {
   local transcript="$1"
-  local key; key="$(cfg openrouter_key)"
-  local model; model="$(cfg model_remote openai/gpt-4o-mini)"
-  if [ -z "$key" ] || [ "$key" = "sk-or-REPLACE_ME" ]; then
-    log_error "openrouter_key not set in $RP_CONFIG"
-    return 1
-  fi
-  local body limit
-  limit="$(cfg remote_max_chars 60000)"
-  body="$(head -c "$limit" "$transcript")"
-  # JSON-escape the transcript safely.
-  local esc
-  esc="$(printf '%s' "$body" | jq -Rs .)"
-  local payload
-  payload=$(jq -n --arg model "$model" \
-    --arg text "$body" \
-    '{model:$model,messages:[
-       {role:"system",content:"You summarise transcripts into concise bullet points. Only use information present in the text."},
-       {role:"user",content:("TRANSCRIPT:\n"+$text+"\n\nSummary (5-8 bullet points):")}],
-      temperature:0.3,max_tokens:700}')
-  local resp
-  resp="$(curl -s --max-time "$(cfg remote_timeout 180)" \
-     -H "Authorization: Bearer $key" \
-     -H 'Content-Type: application/json' \
-     -H 'HTTP-Referer: https://github.com/rumblingpodcast' \
-     -H 'X-Title: RumblingPodcast' \
-     -d "$payload" "https://openrouter.ai/api/v1/chat/completions")" || return 1
-  local out
-  out="$(printf '%s' "$resp" | jq -r '.choices[0].message.content // empty' 2>/dev/null)"
-  if [ -z "$out" ]; then
-    log_error "openrouter returned no content: $(printf '%s' "$resp" | head -c 300)"
-    return 1
-  fi
-  printf '%s\n' "$out"
+  "$RP_BIN/openrouter" "$transcript"
+}
+
+# No-AI fallback: pick the most "summary-like" sentences using a cheap TF-based
+# score (term frequency overlap with the whole transcript, length-normalised).
+# No model, no RAM, no network - it just gives podcast apps something useful in
+# the episode description instead of a placeholder.
+extractive_summary() {
+  local transcript="$1"
+  local max_sentences; max_sentences="$(cfg extractive_sentences 7)"
+  awk -v maxs="$max_sentences" '
+    { gsub(/\r/, ""); print }
+  ' "$transcript" |
+  tr '\n' ' ' |
+  sed -e 's/\. /\.\n/g' -e 's/? /?\n/g' -e 's/! /!\n/g' |
+  awk -v maxs="$maxs" '
+    { gsub(/^[ \t]+|[ \t]+$/, ""); if (length($0) > 40) print }
+  ' > "$RP_ROOT/run/.ext.txt"
+
+  # Document frequency over the candidate sentences.
+  awk -v maxs="$maxs" '
+    { for (i = 1; i <= NF; i++) { w = tolower($i); gsub(/[^a-z0-9]/, "", w);
+        if (length(w) > 4) freq[w]++ } }
+    END { for (w in freq) if (freq[w] > 2) df[w] = freq[w] }
+  ' "$RP_ROOT/run/.ext.txt" > /dev/null
+
+  awk -v maxs="$maxs" '
+    { s = $0; n = split($0, words, " ");
+      if (n < 6) next;
+      score = 0; seen = 0;
+      delete uniq;
+      for (i = 1; i <= n; i++) {
+        w = tolower(words[i]); gsub(/[^a-z0-9]/, "", w);
+        if (length(w) > 4 && !(w in uniq)) { uniq[w] = 1; seen++ }
+      }
+      if (seen == 0) next;
+      # prefer sentences containing numeric/specific detail
+      bonus = (s ~ /[0-9]{2}/) ? 0.6 : 0;
+      score = seen / sqrt(n) + bonus;
+      printf "%d\t%s\n", score, s }
+  ' "$RP_ROOT/run/.ext.txt" | sort -rn -k1,1 | head -"$max_sentences" | cut -f2- |
+  tac | awk '{ printf "- %s\n", $0 }
+    { }' | sed 's/-$/-/'
+  rm -f "$RP_ROOT/run/.ext.txt"
 }
 
 # main: $1 = transcript path. Prints summary on stdout.
@@ -155,10 +178,14 @@ summarize() {
   local mode; mode="$(cfg summarize local)"
   case "$mode" in
     none)
-      printf 'Summaries disabled (summarize = none).\n'
-      return 0 ;;
+      # Still produce a usable description without any model.
+      extractive_summary "$transcript" ;;
+    "")
+      extractive_summary "$transcript" ;;
     openrouter)
       summarize_remote "$transcript" ;;
+    extractive)
+      extractive_summary "$transcript" ;;
     local|*)
       local model_path
       model_path="$RP_MODEL_DIR/$(basename "$(model_path_for "$(cfg model_local gemma-3-270m-it-q4_k_m)")")"

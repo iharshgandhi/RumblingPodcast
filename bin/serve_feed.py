@@ -1,5 +1,15 @@
 #!/usr/bin/env python3
 """
+RumblingPodcast - https://github.com/iharshgandhi/RumblingPodcast
+Copyright (C) 2026 Harsh Gandhi (harshgandhi.com) / Buho Smart Tools (buho.co.in)
+
+Licensed under the GNU General Public License v3.0 or later.
+This is an experimental project provided "AS IS", with NO WARRANTY and no
+liability. It contains no copyrighted material and no circumvention code.
+See DISCLAIMER.md. You are responsible for using it lawfully.
+"""
+#!/usr/bin/env python3
+"""
 RumblingPodcast feed server.
 
 Tiny dependency-free static server for the podcast feed and its audio.

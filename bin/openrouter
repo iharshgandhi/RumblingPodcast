@@ -1,0 +1,243 @@
+#!/bin/bash
+# RumblingPodcast - https://github.com/iharshgandhi/RumblingPodcast
+# Copyright (C) 2026 Harsh Gandhi (harshgandhi.com) / Buho Smart Tools (buho.co.in)
+#
+# Licensed under the GNU General Public License v3.0 or later.
+# This is an experimental project provided "AS IS", with NO WARRANTY and no
+# liability. It contains no copyrighted material and no circumvention code.
+# See DISCLAIMER.md. You are responsible for using it lawfully.
+#
+#!/bin/bash
+# OpenRouter free-tier model discovery, ranking and failover.
+#
+# Ranking note: OpenRouter's public /api/v1/models endpoint does NOT expose a
+# throughput field (verified against the live API: `throughput` appears only
+# inside model *description* prose). So instead of trusting a missing number we
+# rank by our own measured latency, cached on disk. That is both more accurate
+# and self-healing: a model that is fast in practice floats to the top.
+#
+# Only models with prompt AND completion pricing of exactly 0 are ever
+# considered, so a paid model can never be selected.
+#
+# Author: Harsh Gandhi (harshgandhi.com) / Buho Smart Tools (buho.co.in)
+
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
+
+OR_MODELS_URL="https://openrouter.ai/api/v1/models"
+OR_CHAT_URL="https://openrouter.ai/api/v1/chat/completions"
+RANK_CACHE="$RP_ROOT/run/or_rank.cache"
+# How long a cached model list stays fresh. Never empty: an unset TTL would
+# make every age comparison true and refetch on every call.
+CACHE_TTL="$(cfg or_cache_ttl 21600)"
+[ -n "$CACHE_TTL" ] || CACHE_TTL=21600
+
+or_key() {
+  # Read directly rather than via cfg(): this must work even when the function is
+  # invoked in a subshell that has not inherited RP_CONFIG.
+  local k
+  k="$(sed -n 's/^[[:space:]]*openrouter_key[[:space:]]*=[[:space:]]*//p' \
+        "$RP_CONFIG" 2>/dev/null | tail -n1 | tr -d " \r\t\"'")"
+  printf '%s' "$k"
+}
+
+or_key_ok() {
+  local k; k="$(or_key)"
+  [ -n "$k" ] && [ "$k" != "sk-or-REPLACE_ME" ] && [ "$k" != "sk-or-" ]
+}
+
+# --- free-model list ---------------------------------------------------------
+# Prints model ids, best candidate first. Uses the cached ranking when fresh.
+or_free_models() {
+  local list="$RP_ROOT/run/or_free.list"
+  mkdir -p "$RP_ROOT/run"
+
+  # Refresh the raw list periodically (or when missing).
+  local age=0
+  [ -f "$list" ] && age=$(( $(now_epoch) - $(stat -c %Y "$list" 2>/dev/null || echo 0) ))
+
+  if [ ! -s "$list" ] || [ "$age" -gt "$CACHE_TTL" ]; then
+    or_key_ok || { log_error "openrouter_key not set"; return 1; }
+    log_info "fetching OpenRouter model list..."
+    # NOTE: download and parsed output MUST use different paths. Using
+    # "$list.new" for both truncates the download before jq reads it.
+    local tmp="$RP_ROOT/run/or_models.json"
+    curl -s --max-time 30 -H "Authorization: Bearer $(or_key)" "$OR_MODELS_URL" -o "$tmp"
+    if [ ! -s "$tmp" ] || ! jq -e '.data | length' "$tmp" >/dev/null 2>&1; then
+      rm -f "$tmp"; log_error "model list fetch failed or unparseable"; return 1
+    fi
+    # Strictly zero-priced models only. `:free` suffix is not relied upon
+    # because some free models are served under plain ids.
+    #
+    # We also reject any model carrying pricing `overrides`: OpenRouter allows a
+    # nominally-free model to become billable above a token threshold, which
+    # would violate the "never choose paid models" rule on a long transcript.
+    jq -r '
+      .data[]
+      | select((.pricing.prompt // "1") == "0")
+      | select((.pricing.completion // "1") == "0")
+      | select((.pricing.overrides // []) | length == 0)
+      | select((.id | test("image|audio|vision|tts|embedding|clip|lyria|omni|guard|safety";"i")) | not)
+      | select((.architecture.input_modalities // ["text"]) | index("text"))
+      | .id' "$tmp" 2>/dev/null | sort -u > "$list.new"
+    if [ -s "$list.new" ]; then
+      mv "$list.new" "$list"
+      log_info "$(wc -l < "$list") free text model(s) available"
+    else
+      rm -f "$list.new"
+      log_warn "no free models parsed; keeping previous list"
+      [ -s "$list" ] || return 1
+    fi
+  fi
+  [ -s "$list" ] || return 1
+
+  # Order by measured latency (ascending). Unmeasured models sort last, keeping
+  # their discovery order so behaviour is deterministic.
+  awk -F'\t' -v cache="$RANK_CACHE" '
+    function latency(id,   line, cmd) {
+      while ((getline line < cache) > 0) {
+        split(line, a, "\t"); if (a[1] == id) { close(cache); return a[2] + 0 }
+      }
+      close(cache); return -1
+    }
+    { printf "%d\t%s\n", latency($0), $0 }
+  ' "$list" | sort -t"$(printf '\t')" -k1,1n -k2,2 | cut -f2-
+}
+
+# --- score a model (lower is better), cached ---------------------------------
+or_score_model() {
+  local model="$1"
+  local start end secs
+  start="$(date +%s.%N)"
+  local resp
+  resp="$(curl -s --max-time "$(cfg remote_timeout 45)" \
+      -H "Authorization: Bearer $(or_key)" \
+      -H 'Content-Type: application/json' \
+      -d "$(jq -nc --arg m "$model" \
+            '{model:$m,messages:[{role:"user",content:"Reply with the single word: ok"}],max_tokens:8}')" \
+      "$OR_CHAT_URL")"
+  end="$(date +%s.%N)"
+  secs="$(awk -v a="$start" -v b="$end" 'BEGIN{printf "%.3f", b-a}')"
+
+  if printf '%s' "$resp" | jq -e '.choices[0].message.content' >/dev/null 2>&1; then
+    printf '%s\t%s\tok\n' "$model" "$secs" >> "$RANK_CACHE"
+    log_info "model OK: $model (${secs}s)"
+    return 0
+  fi
+  local err; err="$(printf '%s' "$resp" | jq -r '.error.message // .message // "unknown"' 2>/dev/null | head -c 120)"
+  printf '%s\t%s\tfail\n' "$model" "$secs" >> "$RANK_CACHE"
+  log_warn "model unusable: $model ($err)"
+  return 1
+}
+
+# --- summarize with automatic free-model failover ----------------------------
+# Tries models best-first; on the first success, promotes it to the front of the
+# cache so subsequent episodes start there.
+or_chat_with_failover() {
+  local payload_file="$1"
+  local max_tries; max_tries="$(cfg remote_max_tries 5)"
+  mkdir -p "$RP_ROOT/run"
+  touch "$RANK_CACHE"
+
+  local models tried=0 ok=0
+  mapfile -t models < <(or_free_models)
+  [ "${#models[@]}" -gt 0 ] || { log_error "no free OpenRouter models available"; return 1; }
+
+  # Rank by measured latency when we already have measurements; otherwise probe
+  # cheaply (a few tokens) until one model answers, so we do not pay for a
+  # probe of every model on a cold cache.
+  local have_rank=1
+  [ -s "$RANK_CACHE" ] || have_rank=0
+  if [ "$have_rank" -eq 0 ]; then
+    local candidate
+    for candidate in "${models[@]}"; do
+      tried=$((tried+1))
+      [ "$tried" -ge "$max_tries" ] && break
+      if or_score_model "$candidate"; then ok=1; break; fi
+    done
+    [ "$ok" -eq 1 ] || log_warn "no model passed the probe; will try in ranked order"
+  fi
+
+  # Build the attempt order: proven-good and fastest first, then the rest.
+  # Uses bash rather than awk here: passing the model array into awk made the
+  # ranking silently empty, which aborted the whole run.
+  local ranked="$RP_ROOT/run/or_ranked.txt"
+  : > "$ranked"
+  local m score lat cm cl cs
+  for m in "${models[@]}"; do
+    score=2; lat=999
+    if [ -s "$RANK_CACHE" ]; then
+      while IFS=$'\t' read -r cm cl cs; do
+        if [ "$cm" = "$m" ]; then
+          lat="${cl:-999}"; cs="${cs:-unknown}"
+          [ "$cs" = "ok" ] && score=0 || score=1
+          break
+        fi
+      done < "$RANK_CACHE"
+    fi
+    printf '%s\t%s\t%s\n' "$score" "$lat" "$m" >> "$ranked"
+  done
+  # NOTE: mapfile must not sit at the end of a pipeline: it would run in a
+  # subshell, leaving the parent with an empty array (silent total failure).
+  mapfile -t ordered < <(sort -k1,1n -k2,2n -k3,3 "$ranked" | cut -f3-)
+  [ "${#ordered[@]}" -gt 0 ] || { log_error "model ranking produced nothing"; return 1; }
+
+  local model resp out attempts=0
+  for model in "${ordered[@]}"; do
+    attempts=$((attempts+1))
+    [ "$attempts" -gt "$max_tries" ] && break
+    local payload
+    payload="$(jq --arg m "$model" '.model=$m' "$payload_file")"
+    resp="$(curl -s --max-time "$(cfg remote_timeout 180)" \
+        -H "Authorization: Bearer $(or_key)" \
+        -H 'Content-Type: application/json' \
+        -H 'HTTP-Referer: https://github.com/iharshgandhi/RumblingPodcast' \
+        -H 'X-Title: RumblingPodcast' \
+        -d "$payload" "$OR_CHAT_URL")"
+    out="$(printf '%s' "$resp" | jq -r '.choices[0].message.content // empty' 2>/dev/null)"
+    if [ -n "$out" ]; then
+      log_info "summarised with $model"
+      printf '%s\t%s\tok\n' "$model" "0" >> "$RANK_CACHE"
+      printf '%s\n' "$out"
+      return 0
+    fi
+    log_warn "summarisation failed on $model: $(printf '%s' "$resp" | jq -r '.error.message // "no content"' 2>/dev/null | head -c 100)"
+  done
+  log_error "all $attempts free model(s) tried without success"
+  log_error "all free models failed"
+  return 1
+}
+
+# --- entry point -------------------------------------------------------------
+or_summarize() {
+  local transcript="$1"
+  or_key_ok || { log_error "openrouter_key not set in $RP_CONFIG"; return 1; }
+  local limit; limit="$(cfg remote_max_chars 60000)"
+  local body; body="$(head -c "$limit" "$transcript")"
+  local pf="$RP_ROOT/run/or_payload.json"
+  # max_tokens is generous: several free models default to a small cap and
+  # otherwise truncate mid-sentence.
+  jq -n --arg text "$body" --argjson maxtok "$(cfg remote_max_tokens 2000)" '{messages:[
+      {role:"system",content:"You summarise transcripts into concise bullet points. Use only information present in the text. Never invent facts. Write 6 to 8 complete bullets and finish every sentence."},
+      {role:"user",content:("TRANSCRIPT:\n"+$text+"\n\nSummary (6-8 complete bullet points, plain text, no truncation):")}],
+    temperature:0.3,max_tokens:$maxtok}' > "$pf"
+  or_chat_with_failover "$pf"
+}
+
+# --- CLI ---------------------------------------------------------------------
+# Guarded so this file can also be sourced by other scripts.
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+case "${1:-}" in
+  --models)
+    or_key_ok || { echo "openrouter_key not set" >&2; exit 1; }
+    or_free_models ;;
+  --refresh)
+    rm -f "$RP_ROOT/run/or_free.list" "$RANK_CACHE"
+    or_free_models ;;
+  --rank)   [ -f "$RANK_CACHE" ] && cat "$RANK_CACHE" || echo "(no measurements yet)" ;;
+  --probe)
+    or_key_ok || exit 1
+    touch "$RANK_CACHE"; mkdir -p "$RP_ROOT/run"
+    while read -r m; do [ -n "$m" ] && or_score_model "$m"; done < <(or_free_models) ;;
+  *)        [ $# -ge 1 ] && or_summarize "$1" || { echo "usage: $0 <transcript>|--models|--refresh|--rank|--probe" >&2; exit 1; } ;;
+esac
+fi

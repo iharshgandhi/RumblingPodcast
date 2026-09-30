@@ -1,4 +1,13 @@
 #!/bin/bash
+# RumblingPodcast - https://github.com/iharshgandhi/RumblingPodcast
+# Copyright (C) 2026 Harsh Gandhi (harshgandhi.com) / Buho Smart Tools (buho.co.in)
+#
+# Licensed under the GNU General Public License v3.0 or later.
+# This is an experimental project provided "AS IS", with NO WARRANTY and no
+# liability. It contains no copyrighted material and no circumvention code.
+# See DISCLAIMER.md. You are responsible for using it lawfully.
+#
+#!/bin/bash
 # Build the podcast RSS feed from on-disk metadata.
 #
 # Meta records live in $RP_DATA/meta/<id>.meta as KEY=VALUE lines. Regenerating
@@ -23,7 +32,17 @@ gen_feed() {
   local author;      author="$(cfg podcast_author 'Harsh Gandhi')"
   local email;       email="$(cfg podcast_email 'noreply@example.com')"
   local lang;        lang="$(cfg podcast_language 'en')"
-  local artwork;     artwork="$base_url/cover.jpg"
+  local artwork
+  # Channel-level art: reuse the newest episode thumbnail when available.
+  artwork=""
+  local newest_thumb
+  newest_thumb="$(list_meta_sorted | head -1 | cut -d'|' -f8)"
+  if [ -s "$newest_thumb" ]; then
+    mkdir -p "$outdir"
+    ln "$newest_thumb" "$outdir/cover.jpg" 2>/dev/null || cp "$newest_thumb" "$outdir/cover.jpg" 2>/dev/null || true
+    [ -s "$outdir/cover.jpg" ] && artwork="$base_url/cover.jpg"
+  fi
+  [ -n "$artwork" ] || artwork="$base_url/cover.jpg"
 
   # The http server roots at $outdir, so publish feed.xml at the root and
   # expose audio under media/ so enclosure URLs resolve.
@@ -31,7 +50,7 @@ gen_feed() {
   local tmp="$outdir/feed.xml.tmp"
   cat > "$tmp" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
-<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:atom="http://www.w3.org/2005/Atom">
+<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:podcast="https://podcastindex.org/namespace/1.0">
   <channel>
     <title>$(xml_escape "$title")</title>
     <link>$(xml_escape "$base_url")</link>
@@ -67,6 +86,20 @@ EOF
     # resolves without duplicating bytes on a small SD card.
     local served="$outdir/media/${id}.m4a"
     [ -f "$served" ] || ln "$audio" "$served" 2>/dev/null || cp "$audio" "$served" 2>/dev/null || true
+    # Timestamped transcript: Apple Podcasts renders this as a scrollable,
+    # searchable transcript and tapping a line seeks the player to that moment.
+    local vtt="$RP_DATA/transcripts/${id}.vtt"
+    if [ -s "$vtt" ]; then
+      ln "$vtt" "$outdir/media/${id}.vtt" 2>/dev/null \
+        || cp "$vtt" "$outdir/media/${id}.vtt" 2>/dev/null || true
+    fi
+    # Episode artwork: link the thumbnail into media/ when we have one.
+    local art=""
+    if [ -s "$thumb" ]; then
+      ln "$thumb" "$outdir/media/${id}.jpg" 2>/dev/null \
+        || cp "$thumb" "$outdir/media/${id}.jpg" 2>/dev/null || true
+      art="$base_url/media/${id}.jpg"
+    fi
     local enclosure_url="$base_url/media/${id}.m4a"
     local page_url="https://rumble.com${url}"
 
@@ -92,9 +125,13 @@ EOF
       <description>$(xml_escape "$summary_text")</description>
       <content:encoded><![CDATA[<p>$(printf '%s' "$summary_body")</p>]]></content:encoded>
       <enclosure url="$(xml_escape "$enclosure_url")" length="$(wc -c < "$audio" | tr -d ' ')" type="audio/mp4"/>
+      $(if [ -s "$vtt" ]; then
+           printf '      <podcast:transcript url="%s" type="text/vtt" language="%s"/>\n' \
+                  "$(xml_escape "$base_url/media/${id}.vtt")" "$lang"
+         fi)
       <itunes:duration>$dur_str</itunes:duration>
       <itunes:explicit>false</itunes:explicit>
-      <itunes:image href="$(xml_escape "$base_url/media/${id}.jpg")"/>
+      <itunes:image href="$(xml_escape "${art:-$base_url/cover.jpg}")"/>
     </item>
 EOF
     count=$((count+1))
