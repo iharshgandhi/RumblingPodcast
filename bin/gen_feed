@@ -7,175 +7,285 @@
 # liability. It contains no copyrighted material and no circumvention code.
 # See DISCLAIMER.md. You are responsible for using it lawfully.
 #
-#!/bin/bash
-# Build the podcast RSS feed from on-disk metadata.
+# ---------------------------------------------------------------------------
+# Build one RSS feed PER CHANNEL, plus an index page listing them.
 #
-# Meta records live in $RP_DATA/meta/<id>.meta as KEY=VALUE lines. Regenerating
-# the feed is idempotent and cheap, so it runs after every episode completes and
-# after every retention sweep.
+#   data/feeds/<channel>.xml   one podcast per subscribed channel
+#   data/index.html            landing page: channel name -> copyable feed URL
 #
-# Author: Harsh Gandhi (harshgandhi.com) / Buho Smart Tools (buho.co.in)
-
+# Meta records live in data/meta/<id>.meta as KEY=VALUE lines. Regenerating is
+# idempotent and cheap, so this runs after every episode and retention sweep.
+# ---------------------------------------------------------------------------
 source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
 
-gen_feed() {
-  local outdir="${1:-$RP_DATA}"
-  local feed_dir="$outdir/feed"
-  mkdir -p "$feed_dir"
+# ---- channel registry ----------------------------------------------------
+# channels/<slug>.name holds the human-readable Rumble channel name, and
+# channels/<slug>.jpg its avatar, both fetched once by the worker.
 
-    local base_url
-  base_url="$(cfg feed_base_url "http://$(hostname -I 2>/dev/null | awk '{print $1}'):$(cfg serve_port 8088)")"
-  local base_url="${base_url%/}"
+channel_meta_file() { printf '%s/channels/%s' "$RP_DATA" "$1"; }
 
-  local title;       title="$(cfg podcast_title 'RumblingPodcast')"
-  local description; description="$(cfg podcast_description 'Automated podcast from Rumble channels')"
-  local author;      author="$(cfg podcast_author 'Harsh Gandhi')"
-  local email;       email="$(cfg podcast_email 'noreply@example.com')"
-  local lang;        lang="$(cfg podcast_language 'en')"
-  local artwork
-  # Channel-level art: reuse the newest episode thumbnail when available.
-  artwork=""
-  local newest_thumb
-  newest_thumb="$(list_meta_sorted | head -1 | cut -d'|' -f8)"
-  if [ -s "$newest_thumb" ]; then
-    mkdir -p "$outdir"
-    ln "$newest_thumb" "$outdir/cover.jpg" 2>/dev/null || cp "$newest_thumb" "$outdir/cover.jpg" 2>/dev/null || true
-    [ -s "$outdir/cover.jpg" ] && artwork="$base_url/cover.jpg"
+channel_display_name() {  # slug -> printable name (falls back to the slug)
+  local f; f="$(channel_meta_file "$1").name"
+  if [ -s "$f" ]; then
+    head -1 "$f"
+  else
+    printf '%s' "$1"
   fi
-  [ -n "$artwork" ] || artwork="$base_url/cover.jpg"
+}
 
-  # The http server roots at $outdir, so publish feed.xml at the root and
-  # expose audio under media/ so enclosure URLs resolve.
-  mkdir -p "$outdir/media"
-  local tmp="$outdir/feed.xml.tmp"
-  cat > "$tmp" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:podcast="https://podcastindex.org/namespace/1.0">
-  <channel>
-    <title>$(xml_escape "$title")</title>
-    <link>$(xml_escape "$base_url")</link>
-    <language>$(xml_escape "$lang")</language>
-    <description>$(xml_escape "$description")</description>
-    <generator>RumblingPodcast</generator>
-    <lastBuildDate>$(rfc822_date 0)</lastBuildDate>
-    <itunes:author>$(xml_escape "$author")</itunes:author>
-    <itunes:summary>$(xml_escape "$description")</itunes:summary>
-    <itunes:image href="$(xml_escape "$artwork")"/>
-    <itunes:category text="Technology"/>
-    <itunes:explicit>false</itunes:explicit>
-    <itunes:owner>
-      <itunes:name>$(xml_escape "$author")</itunes:name>
-      <itunes:email>$(xml_escape "$email")</itunes:email>
-    </itunes:owner>
-    <atom:link href="$(xml_escape "$base_url/feed.xml")" rel="self" type="application/rss+xml"/>
-EOF
+channel_avatar() {  # slug -> path to the avatar, or empty
+  local f; f="$(channel_meta_file "$1").jpg"
+  [ -s "$f" ] && printf '%s' "$f"
+}
 
-  # Newest first, and skip anything whose audio has aged out of retention.
-  local cutoff
+# ---- one channel's feed --------------------------------------------------
+gen_channel_feed() {
+  local outdir="$1" slug="$2"
+  local name art_url base_url
+  name="$(channel_display_name "$slug")"
+  base_url="${RP_BASE_URL%/}"
+  art_url="$base_url/media/channel-${slug}.jpg"
+
+  local tmp="$outdir/feeds/.${slug}.xml.tmp"
+  {
+    printf '<?xml version="1.0" encoding="UTF-8"?>\n'
+    printf '<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:podcast="https://podcastindex.org/namespace/1.0">\n'
+    printf '  <channel>\n'
+    printf '    <title>%s</title>\n' "$(xml_escape "$name")"
+    printf '    <link>%s</link>\n' "$(xml_escape "https://rumble.com/c/$slug")"
+    printf '    <language>%s</language>\n' "$(xml_escape "$(cfg podcast_language en)")"
+    printf '    <description>%s</description>\n' "$(xml_escape "${name} — automated podcast with transcripts and summaries. Generated from the Rumble channel ${slug}.")"
+    printf '    <generator>RumblingPodcast</generator>\n'
+    printf '    <lastBuildDate>%s</lastBuildDate>\n' "$(rfc822_date 0)"
+    printf '    <itunes:author>%s</itunes:author>\n' "$(xml_escape "$(cfg podcast_author 'Harsh Gandhi')")"
+    printf '    <itunes:summary>%s</itunes:summary>\n' "$(xml_escape "$name")"
+    printf '    <itunes:image href="%s"/>\n' "$(xml_escape "$art_url")"
+    printf '    <itunes:category text="Technology"/>\n'
+    printf '    <itunes:explicit>false</itunes:explicit>\n'
+    printf '    <itunes:owner>\n      <itunes:name>%s</itunes:name>\n      <itunes:email>%s</itunes:email>\n    </itunes:owner>\n' \
+      "$(xml_escape "$(cfg podcast_author 'Harsh Gandhi')")" "$(xml_escape "$(cfg podcast_email noreply@example.com)")"
+    printf '    <atom:link href="%s" rel="self" type="application/rss+xml"/>\n' \
+      "$(xml_escape "$base_url/feeds/${slug}.xml")"
+  } > "$tmp"
+
+  local count=0 cutoff lang
+  lang="$(cfg podcast_language en)"
   cutoff="$(subtract_days "$(now_epoch)" "$(cfg retention_days 30)")"
 
-  local count=0
-  while IFS='|' read -r id title dur pubdate url audio summary_path thumb; do
+  while IFS='|' read -r id title dur pubdate url audio summary_path thumb ch; do
     [ -n "$id" ] || continue
-    [ -f "$audio" ] || continue                       # audio gone => drop episode
-    [ "$pubdate" -ge "$cutoff" ] 2>/dev/null || continue # aged out => drop episode
-    local esc_title guid
+    [ "$ch" = "$slug" ] || continue          # only this channel's episodes
+    [ -f "$audio" ] || continue              # audio gone => drop episode
+    [ "$pubdate" -ge "$cutoff" ] 2>/dev/null || continue
+
+    publish_media "$outdir" "$id" "$audio" >/dev/null || continue
+    local vtt dur_str esc_title guid page_url
+    vtt="$(publish_media "$outdir" "$id" "$RP_DATA/transcripts/${id}.vtt" vtt)" || vtt=""
     esc_title="$(xml_escape "$title")"
     guid="rumble-$id"
-    # Hard-link the audio into the served media/ dir so the enclosure URL
-    # resolves without duplicating bytes on a small SD card.
-    local served="$outdir/media/${id}.m4a"
-    [ -f "$served" ] || ln "$audio" "$served" 2>/dev/null || cp "$audio" "$served" 2>/dev/null || true
-    # Timestamped transcript: Apple Podcasts renders this as a scrollable,
-    # searchable transcript and tapping a line seeks the player to that moment.
-    local vtt="$RP_DATA/transcripts/${id}.vtt"
-    if [ -s "$vtt" ]; then
-      ln "$vtt" "$outdir/media/${id}.vtt" 2>/dev/null \
-        || cp "$vtt" "$outdir/media/${id}.vtt" 2>/dev/null || true
-    fi
-    # Episode artwork: link the thumbnail into media/ when we have one.
-    local art=""
-    if [ -s "$thumb" ]; then
-      ln "$thumb" "$outdir/media/${id}.jpg" 2>/dev/null \
-        || cp "$thumb" "$outdir/media/${id}.jpg" 2>/dev/null || true
-      art="$base_url/media/${id}.jpg"
-    fi
-    local enclosure_url="$base_url/media/${id}.m4a"
-    local page_url="https://rumble.com${url}"
+    page_url="https://rumble.com${url}"
 
-    # Inline plain-text summary for the episode description / CDATA block.
+    d_h=$(( dur / 3600 )); d_m=$(( (dur % 3600) / 60 )); d_s=$(( dur % 60 ))
+    dur_str="$(printf '%02d:%02d:%02d' "$d_h" "$d_m" "$d_s")"
+
     local summary_text="" summary_body=""
     if [ -f "$summary_path" ]; then
       summary_text="$(head -c 4000 "$summary_path")"
       summary_body="$(printf '%s' "$summary_text" | tr '\n' ' ')"
     fi
 
-    # Precompute duration outside the heredoc: bash arithmetic is not valid
-    # inside command substitution within a heredoc.
-    local d_h d_m d_s dur_str
-    d_h=$(( dur / 3600 )); d_m=$(( (dur % 3600) / 60 )); d_s=$(( dur % 60 ))
-    dur_str="$(printf '%02d:%02d:%02d' "$d_h" "$d_m" "$d_s")"
-
-    cat >> "$tmp" <<EOF
-    <item>
-      <title>$esc_title</title>
-      <link>$(xml_escape "$page_url")</link>
-      <guid isPermaLink="false">$(xml_escape "$guid")</guid>
-      <pubDate>$(rfc822_date "$pubdate")</pubDate>
-      <description>$(xml_escape "$summary_text")</description>
-      <content:encoded><![CDATA[<p>$(printf '%s' "$summary_body")</p>]]></content:encoded>
-      <enclosure url="$(xml_escape "$enclosure_url")" length="$(wc -c < "$audio" | tr -d ' ')" type="audio/mp4"/>
-      $(if [ -s "$vtt" ]; then
-           printf '      <podcast:transcript url="%s" type="text/vtt" language="%s"/>\n' \
-                  "$(xml_escape "$base_url/media/${id}.vtt")" "$lang"
-         fi)
-      <itunes:duration>$dur_str</itunes:duration>
-      <itunes:explicit>false</itunes:explicit>
-      <itunes:image href="$(xml_escape "${art:-$base_url/cover.jpg}")"/>
-    </item>
-EOF
+    {
+      printf '    <item>\n'
+      printf '      <title>%s</title>\n' "$esc_title"
+      printf '      <link>%s</link>\n' "$(xml_escape "$page_url")"
+      printf '      <guid isPermaLink="false">%s</guid>\n' "$(xml_escape "$guid")"
+      printf '      <pubDate>%s</pubDate>\n' "$(rfc822_date "$pubdate")"
+      printf '      <description>%s</description>\n' "$(xml_escape "$summary_text")"
+      printf '      <content:encoded><![CDATA[<p>%s</p>]]></content:encoded>\n' "$summary_body"
+      printf '      <enclosure url="%s" length="%s" type="audio/mp4"/>\n' \
+        "$(xml_escape "$base_url/media/${id}.m4a")" "$(wc -c < "$audio" | tr -d ' ')"
+      if [ -n "$vtt" ]; then
+        printf '      <podcast:transcript url="%s" type="text/vtt" language="%s"/>\n' \
+          "$(xml_escape "$base_url/media/${id}.vtt")" "$lang"
+      fi
+      printf '      <itunes:duration>%s</itunes:duration>\n' "$dur_str"
+      printf '      <itunes:explicit>false</itunes:explicit>\n'
+      printf '      <itunes:image href="%s"/>\n' "$(xml_escape "$art_url")"
+      printf '    </item>\n'
+    } >> "$tmp"
     count=$((count+1))
   done < <(list_meta_sorted)
 
-  cat >> "$tmp" <<EOF
-  </channel>
-</rss>
-EOF
-  mv "$tmp" "$outdir/feed.xml"
-
-  # index.html so the URL is browsable.
-  {
-    printf '<!doctype html><meta charset=utf-8><title>%s</title>\n' "$(xml_escape "$title")"
-    printf '<h1>%s</h1><p><a href="feed.xml">RSS feed</a></p><ul>\n' "$(xml_escape "$title")"
-    while IFS='|' read -r id title dur pubdate url audio summary_path thumb; do
-      [ -n "$id" ] || continue
-      [ -f "$audio" ] || continue
-      printf '<li><a href="media/%s.m4a">%s</a></li>\n' \
-        "$(xml_escape "$id")" "$(xml_escape "$title")"
-    done < <(list_meta_sorted)
-    printf '</ul>\n'
-  } > "$outdir/index.html"
-
-  log_info "feed written: $outdir/feed.xml ($count episode(s))"
+  printf '  </channel>\n</rss>\n' >> "$tmp"
+  mv "$tmp" "$outdir/feeds/${slug}.xml"
+  printf '%s' "$count"
 }
 
-# Emit newest-first TSV: id|title|dur|pubdate|relurl|audio|summary|thumb
+# Hard-link a file into the served media/ dir (falling back to a copy), so the
+# enclosure URL resolves without duplicating bytes on a small SD card.
+publish_media() {  # publish_media <outdir> <name> <src> <ext>
+  local outdir="$1" name="$2" src="$3" ext="${4:-m4a}"
+  [ -s "$src" ] || return 1
+  mkdir -p "$outdir/media"
+  local dst="$outdir/media/${name}.${ext}"
+  [ -f "$dst" ] || ln "$src" "$dst" 2>/dev/null || cp "$src" "$dst" 2>/dev/null || return 1
+  printf '%s' "$dst"
+}
+
+# ---- landing page --------------------------------------------------------
+gen_index() {
+  local outdir="$1" slug count
+  local base_url="${RP_BASE_URL%/}"
+  {
+    cat <<HTML
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>RumblingPodcast</title>
+<style>
+ :root{color-scheme:dark light}
+ body{font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+      max-width:44rem;margin:0 auto;padding:2.5rem 1.25rem;background:#111;color:#eee}
+ h1{font-size:1.5rem;margin:0 0 .25rem}
+ p.sub{color:#9aa;margin:0 0 2rem;font-size:.9rem}
+ .ch{display:flex;gap:1rem;align-items:center;padding:1rem;margin:0 0 .75rem;
+     background:#1c1c1c;border:1px solid #2e2e2e;border-radius:10px;flex-wrap:wrap}
+ .ch img{width:64px;height:64px;border-radius:50%;object-fit:cover;background:#333;flex:none}
+ .info{flex:1 1 14rem;min-width:0}
+ .name{font-weight:600}
+ .count{color:#8a8a8a;font-size:.85rem}
+ code{display:block;background:#000;border:1px solid #333;border-radius:6px;
+      padding:.5rem .6rem;margin-top:.35rem;font-size:.8rem;overflow-x:auto;
+      white-space:nowrap;color:#7fd}
+ a{color:#6cf}
+ footer{margin-top:2.5rem;color:#777;font-size:.8rem;border-top:1px solid #2a2a2a;padding-top:1rem}
+</style></head><body>
+<h1>RumblingPodcast</h1>
+<p class="sub">Each Rumble channel has its own podcast feed. Copy a link below and
+add it to your podcast app.</p>
+HTML
+
+    for slug in $(cfg channels usawatchdog); do
+      count=0
+      local f="$outdir/feeds/${slug}.xml"
+      if [ -f "$f" ]; then
+        # grep -c can emit "0\n0" when several files match; take the last line.
+        count="$(grep -c '<item>' "$f" 2>/dev/null | tail -1)"
+        count="${count:-0}"
+      fi
+      local name art
+      name="$(channel_display_name "$slug")"
+      art="$(channel_avatar "$slug")"
+      printf '<div class="ch">\n'
+      if [ -n "$art" ] && [ -s "$outdir/media/channel-${slug}.jpg" ]; then
+        printf '  <img src="media/channel-%s.jpg" alt="%s">\n' \
+          "$(xml_escape "$slug")" "$(xml_escape "$name")"
+      else
+        printf "  <img src=\"media/channel-%s.jpg\" alt=\"%s\" onerror=\"this.style.visibility='hidden'\">\n" \
+          "$(xml_escape "$slug")" "$(xml_escape "$name")"
+      fi
+      printf '  <div class="info">\n'
+      printf '    <div class="name">%s</div>\n' "$(xml_escape "$name")"
+      printf '    <div class="count">%s episode%s &middot; <a href="https://rumble.com/c/%s" target="_blank" rel="noopener">view on Rumble</a></div>\n' \
+        "$count" "$([ "$count" = 1 ] && echo '' || echo 's')" "$(xml_escape "$slug")"
+      printf '    <code>%s/feeds/%s.xml</code>\n' "$base_url" "$(xml_escape "$slug")"
+      printf '  </div>\n</div>\n'
+    done
+
+    cat <<HTML
+<footer>
+Generated by <a href="https://github.com/iharshgandhi/RumblingPodcast">RumblingPodcast</a>,
+an experimental project. Feeds are reachable on your local network only.
+</footer>
+</body></html>
+HTML
+  } > "$outdir/index.html"
+}
+
+# ---- entry point ---------------------------------------------------------
+gen_feed() {
+  local outdir="${1:-$RP_DATA}"
+  mkdir -p "$outdir/feeds" "$outdir/media"
+
+  RP_BASE_URL="$(cfg feed_base_url "")"
+  [ -z "$RP_BASE_URL" ] && RP_BASE_URL="http://$(hostname -I 2>/dev/null | awk '{print $1}'):$(cfg serve_port 8088)"
+  RP_BASE_URL="${RP_BASE_URL%/}"
+
+  # Remove feeds for channels that are no longer subscribed.
+  local slug total=0 n
+  for f in "$outdir/feeds"/*.xml; do
+    [ -e "$f" ] || continue
+    local b; b="$(basename "$f" .xml)"
+    cfg channels usawatchdog | tr ' ' '\n' | grep -qx "$b" || rm -f "$f"
+  done
+
+  for slug in $(cfg channels usawatchdog); do
+    [ -n "$slug" ] || continue
+    # Publish the channel avatar next to the media so the index/feed can use it.
+    local art; art="$(channel_avatar "$slug")"
+    if [ -n "$art" ]; then
+      ln "$art" "$outdir/media/channel-${slug}.jpg" 2>/dev/null \
+        || cp "$art" "$outdir/media/channel-${slug}.jpg" 2>/dev/null || true
+    elif [ ! -s "$outdir/media/channel-${slug}.jpg" ]; then
+      make_placeholder_art "$outdir/media/channel-${slug}.jpg" "$slug"
+    fi
+    n="$(gen_channel_feed "$outdir" "$slug")"
+    n="${n:-0}"
+    total=$(( total + n ))
+    ch_name="$(channel_display_name "$slug")"
+    log_info "feed: feeds/${slug}.xml (${ch_name}) — ${n} episode(s)"
+  done
+
+  gen_index "$outdir"
+  log_info "feeds written: $total episode(s) across $(cfg channels usawatchdog | wc -w) channel(s)"
+}
+
+# Rumble does not publish an avatar for every channel. Rather than reuse an
+# unrelated video thumbnail (misleading artwork), generate a neutral tile
+# showing the channel's initial.
+make_placeholder_art() {
+  local out="$1" slug="$2"
+  local initial
+  initial="$(printf '%s' "$slug" | cut -c1 | tr '[:lower:]' '[:upper:]')"
+  [ -s "$out" ] && return 0
+  command -v ffmpeg >/dev/null || return 0
+  ffmpeg -loglevel error -y -f lavfi -i "color=c=0x2b6cb0:s=600x600" \
+    -vf "drawtext=text='$initial':fontcolor=white:fontsize=300:x=(w-text_w)/2:y=(h-text_h)/2" \
+    -frames:v 1 "$out" 2>/dev/null || rm -f "$out"
+}
+
+# Emit newest-first TSV: id|title|dur|pubdate|relurl|audio|summary|thumb|channel
 list_meta_sorted() {
   local meta_dir="$RP_DATA/meta"
   [ -d "$meta_dir" ] || return 0
+  local f
   for f in "$meta_dir"/*.meta; do
     [ -e "$f" ] || continue
-    local id title dur pubdate url audio summary thumb
+    local id title dur pubdate url audio summary thumb channel
     id="$(sed -n 's/^ID=//p' "$f" | head -1)"
     title="$(sed -n 's/^TITLE=//p' "$f" | head -1)"
     dur="$(sed -n 's/^DUR=//p' "$f" | head -1)"
     pubdate="$(sed -n 's/^PUBDATE=//p' "$f" | head -1)"
     url="$(sed -n 's/^URL=//p' "$f" | head -1)"
+    channel="$(sed -n 's/^CHANNEL=//p' "$f" | head -1)"
+    # Episodes stored before per-channel feeds existed have no CHANNEL=.
+    [ -n "$channel" ] || channel="$(guess_channel "$f")"
     audio="$RP_DATA/audio/${id}.m4a"
     summary="$RP_DATA/summaries/${id}.txt"
     thumb="$RP_DATA/meta/${id}.jpg"
-    printf '%s|%s|%s|%s|%s|%s|%s|%s\n' "$id" "$title" "$dur" "$pubdate" "$url" "$audio" "$summary" "$thumb"
+    printf '%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
+      "$id" "$title" "$dur" "$pubdate" "$url" "$audio" "$summary" "$thumb" "$channel"
   done | sort -t'|' -k4,4rn
+}
+
+# Backfill: attribute legacy episodes to the only channel they can belong to.
+guess_channel() {
+  local n
+  n="$(cfg channels usawatchdog | wc -w)"
+  if [ "$n" = 1 ]; then
+    cfg channels usawatchdog | tr ' ' '\n' | head -1
+  fi
 }
 
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then

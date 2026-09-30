@@ -232,7 +232,9 @@ c_info "yt-dlp $("$RP_ROOT/bin/yt-dlp" --version 2>/dev/null | head -1)"
 # ---- config -------------------------------------------------------------
 CONF="$RP_ROOT/config/rp.conf"
 if [ -f "$CONF" ]; then
+  # Never clobber live settings: rp.conf holds the API key and channel list.
   c_ok "keeping your existing settings"
+  cp -p "$CONF" "$CONF.bak.$(date +%Y%m%d-%H%M%S)"
 else
   cp "$SRC_DIR/config/rp.conf.example" "$CONF"
 fi

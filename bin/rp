@@ -80,8 +80,15 @@ cmd_status() {
   printf '  %-16s %s\n' "memory free" "$(awk '/MemAvailable/{printf "%dMB", $2/1024}' /proc/meminfo 2>/dev/null)"
   port="$(get_conf serve_port)"; port="${port:-8088}"
   ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
-  c_head "Feed"
-  printf '  http://%s:%s/feed.xml\n' "${ip:-<this-host>}" "$port"
+  c_head "Feeds (one per channel)"
+  printf '  %s -> add this in your podcast app\n' "http://${ip:-<this-host>}:$port/"
+  local ch cname
+  while read -r ch; do
+    [ -n "$ch" ] || continue
+    cname="$(cat "$RP_ROOT/data/channels/$ch.name" 2>/dev/null || echo "$ch")"
+    printf '    %s\n        http://%s:%s/feeds/%s.xml\n' \
+      "$cname" "${ip:-<this-host>}" "$port" "$ch"
+  done < <(list_channels)
   c_head "Recent activity"
   "$RP_ROOT/bin/worker" --log 2>/dev/null | tail -8 || tail -8 "$RP_ROOT/logs/rp.log" 2>/dev/null
 }

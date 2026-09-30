@@ -93,6 +93,11 @@ retention_days = 30
 # timer from this; you never need to touch cron.
 run_time = 02:00
 
+# How often to re-fetch each channel's display name and avatar (days).
+# Each channel is served as its own podcast feed, titled and illustrated
+# with these.
+channel_meta_days = 7
+
 # How often to scan channels for new videos (hours).
 scan_interval_hours = 6
 # Pause between videos, to stay gentle on a machine running Pi-hole (seconds).

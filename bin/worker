@@ -22,8 +22,34 @@ source "$(dirname "${BASH_SOURCE[0]}")/fetch_audio"
 
 VIDEO_TMP="$RP_DATA/video"
 
+# Fetch (once) the channel's display name and avatar. Each channel becomes its
+# own podcast, so these drive the feed title and artwork. Refreshed at most
+# once per retention window to keep the nightly run cheap.
+ensure_channel_meta() {
+  local raw="$1" slug dir name_file age_file age days
+  slug="$(normalize_channel "$raw")" || return 1
+  dir="$RP_DATA/channels"
+  mkdir -p "$dir"
+  name_file="$dir/${slug}.name"
+  age_file="$dir/${slug}.fetched"
+
+  days="$(cfg channel_meta_days 7)"
+  if [ -s "$name_file" ] && [ -f "$age_file" ]; then
+    age=$(( $(now_epoch) - $(cat "$age_file" 2>/dev/null || echo 0) ))
+    [ "$age" -lt $(( days * 86400 )) ] && return 0
+  fi
+
+  # A failed fetch must not abort the caller's loop: always return 0.
+  name="$(fetch_channel_art "$raw" "$dir/${slug}.jpg" 2>/dev/null)" || name=""
+  [ -n "$name" ] || name="$slug"
+  printf '%s' "$name" > "$name_file"
+  now_epoch > "$age_file"
+  [ -n "$name" ] && log_info "channel: $slug = ${name}"
+  return 0
+}
+
 process_video() {
-  local id="$1" title="$2" dur="$3" pubdate="$4" relurl="$5"
+  local id="$1" title="$2" dur="$3" pubdate="$4" relurl="$5" channel="$6"
   local url="https://rumble.com${relurl}"
   local base="$id"
 
@@ -90,6 +116,7 @@ TITLE=$title
 DUR=$dur
 PUBDATE=$pubdate
 URL=$relurl
+CHANNEL=$channel
 TRANSCRIPT_SRC=$src
 CREATED=$(now_epoch)
 EOF
@@ -142,12 +169,13 @@ main() {
     local channels; channels="$(cfg channels usawatchdog)"
     for ch in $channels; do
       local days; days="$(cfg max_age_days 7)"
+      ensure_channel_meta "$ch"
       log_info "scanning channel: $ch (last ${days}d)"
       while IFS=$'\t' read -r epoch dur upload title relurl; do
         [ -n "$relurl" ] || continue
         local id; id="$(printf '%s' "$relurl" | sed -n 's#^/\(v[a-z0-9]*\)-.*#\1#p')"
         [ -n "$id" ] || id="$(safe_name "$relurl")"
-        process_video "$id" "$title" "$dur" "$epoch" "$relurl" \
+        process_video "$id" "$title" "$dur" "$epoch" "$relurl" "$ch" \
           && throttle "$(cfg sleep_between_videos 20)"
       done < <("$RP_BIN/discover" "$ch" "$days" 2>/dev/null)
     done
@@ -164,10 +192,11 @@ case "${1:-}" in
     acquire_lock || exit 0
     channels="$(cfg channels usawatchdog)"
     for ch in $channels; do
+      ensure_channel_meta "$ch"
       while IFS=$'\t' read -r epoch dur upload title relurl; do
         [ -n "$relurl" ] || continue
         id="$(printf '%s' "$relurl" | sed -n 's#^/\(v[a-z0-9]*\)-.*#\1#p')"
-        process_video "$id" "$title" "$dur" "$epoch" "$relurl"
+        process_video "$id" "$title" "$dur" "$epoch" "$relurl" "$ch"
       done < <("$RP_BIN/discover" "$ch" "$(cfg max_age_days 7)" 2>/dev/null)
     done
     retention_sweep

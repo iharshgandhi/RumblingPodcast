@@ -49,14 +49,17 @@ download_audio() {
 
   # Fallback: lowest-quality video stream, then extract audio immediately.
   log_warn "no audio-only stream for $base; falling back to video+extract"
+  # ffmpeg is a system package; $RP_BIN/ffmpeg does not exist.
+  local ff; ff="$(command -v ffmpeg || true)"
+  [ -n "$ff" ] || { rm -f "$outdir/.tmp/${base}".*; log_error "ffmpeg not installed"; return 1; }
   if "$ytdlp" --no-warnings --no-playlist --no-progress \
        -f 'worstvideo*+worstaudio/worst' \
        -o "$outdir/.tmp/${base}.v.%(ext)s" "$url" >/dev/null 2>&1; then
     local v; v="$(ls "$outdir/.tmp/${base}.v".* 2>/dev/null | head -1)"
     if [ -n "$v" ] && [ -s "$v" ]; then
-      "$RP_BIN/ffmpeg" -nostdin -loglevel error -y -i "$v" -vn -c:a copy \
+      "$ff" -nostdin -loglevel error -y -i "$v" -vn -c:a copy \
         "$outdir/${base}.m4a" </dev/null 2>/dev/null || {
-        "$RP_BIN/ffmpeg" -nostdin -loglevel error -y -i "$v" -vn -ac 2 -b:a 64k \
+        "$ff" -nostdin -loglevel error -y -i "$v" -vn -ac 2 -b:a 64k \
           "$outdir/${base}.m4a" </dev/null 2>/dev/null; }
       rm -f "$v"          # delete the video immediately, per requirement
       if [ -s "$outdir/${base}.m4a" ]; then
@@ -73,7 +76,11 @@ download_audio() {
 # Transcribe to 16k mono WAV via ffmpeg (input for whisper.cpp).
 make_wav() {
   local audio="$1" wav="$2"
-  "$RP_BIN/ffmpeg" -nostdin -loglevel error -y -i "$audio" \
+  # ffmpeg is a system package, not an app-local binary: $RP_BIN/ffmpeg does not
+  # exist and this used to fail with 127 (command not found).
+  local ff; ff="$(command -v ffmpeg || true)"
+  [ -n "$ff" ] || { echo "ffmpeg not installed" >&2; return 1; }
+  "$ff" -nostdin -loglevel error -y -i "$audio" \
     -ar 16000 -ac 1 -c:a pcm_s16le "$wav" </dev/null 2>/dev/null
 }
 

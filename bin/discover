@@ -293,6 +293,56 @@ fetch_thumbnail() {
   return 1
 }
 
+# Fetch a CHANNEL's display name and its own square avatar.
+#
+# Rumble does not expose this through yt-dlp or any documented API, so we read
+# the channel page:
+#   display name  -> the <h1> of /c/<slug>
+#   avatar        -> the CDN asset whose filename matches 1-<slug>-<hash>.jpeg
+#                    (a channel avatar, 150x150, distinct from any video thumb)
+#
+# Prints "<name>" on stdout. Returns non-zero if the page can't be read.
+# Writes the avatar to $2 when found; never fails the caller over art.
+fetch_channel_art() {  # fetch_channel_art <channel> <out.jpg>
+  local channel="$1" out="$2" slug page name img
+  slug="$(normalize_channel "$channel")" || return 1
+  mkdir -p "$(dirname "$out")"
+
+  page="$(curl -fsSL --max-time 30 "https://rumble.com/c/$slug" 2>/dev/null)" \
+    || { printf ''; return 1; }
+
+  # Display name: first <h1>…</h1> on the page.
+  name="$(printf '%s' "$page" \
+          | grep -oE '<h1[^>]*>[^<]{2,120}</h1>' \
+          | head -1 \
+          | sed 's/<h1[^>]*>//; s/<\/h1>//')"
+  [ -n "$name" ] || name="$slug"
+
+  # Avatar: a square CDN asset named after the channel, e.g.
+  #   .../TtLba.baa.1-BeyondMystic-rq32a3.jpeg
+  # This is the channel avatar, not a video thumbnail (those carry a title).
+  img="$(printf '%s' "$page" \
+        | grep -oE 'https://[a-z0-9.-]*rumble\.cloud/[^"'"'"' <]{0,140}1-'"$slug"'-[a-z0-9]{4,10}\.(jpeg|jpg|png)' \
+        | head -1)"
+  case "$img" in
+    http*) ;;
+    *) img="" ;;
+  esac
+
+  if [ -n "$img" ]; then
+    curl -fsSL --max-time 30 -o "$out.part" "$img" 2>/dev/null || true
+    # Guard against an HTML error page saved as an image.
+    if [ -s "$out.part" ] && [ "$(head -c 2 "$out.part" | od -An -tx1 | tr -d ' \n')" != "3c21" ]; then
+      mv "$out.part" "$out"
+    else
+      rm -f "$out.part"
+    fi
+  fi
+
+  printf '%s' "$name"
+  return 0
+}
+
 main() {
   local channel="$1" days="$2"
   local since

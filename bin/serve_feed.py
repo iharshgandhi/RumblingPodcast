@@ -57,14 +57,21 @@ class FeedHandler(BaseHTTPRequestHandler):
     def resolve(self, path):
         path = path.split("?", 1)[0].split("#", 1)[0]
         path = os.path.normpath(path).lstrip("/")
+        # The site root and any directory show the browsable index page, which
+        # lists each channel's podcast feed. feed.xml remains available for
+        # anyone who still have the old single-feed URL.
+        index_page = "index.html"
         if path in ("", "."):
-            path = "feed.xml"
+            path = index_page
         root = os.path.realpath(self.server.root)
         full = os.path.realpath(os.path.join(root, path))
         if not (full == root or full.startswith(root + os.sep)):
             return None
         if os.path.isdir(full):
-            full = os.path.join(full, "feed.xml")
+            candidate = os.path.join(full, index_page)
+            if not os.path.isfile(candidate):
+                candidate = os.path.join(full, "feed.xml")
+            full = candidate
             if not os.path.isfile(full):
                 return None
         return full
