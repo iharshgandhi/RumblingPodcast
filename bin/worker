@@ -173,5 +173,12 @@ case "${1:-}" in
     retention_sweep
     ;;
   --retention) acquire_lock || exit 0; retention_sweep ;;
-  *) main ;;
+  # --log is a read-only convenience for 'rp status'.
+  --log)       tail -n "${2:-20}" "$RP_LOG" 2>/dev/null ;;
+  ''|run) main ;;
+  --help|-h) sed -n '2,12p' "$0" ;;
+  *)
+    printf 'unknown option: %s\n' "$1" >&2
+    printf 'usage: worker [--once|--retention|--log [n]|--help]\n' >&2
+    exit 2 ;;
 esac

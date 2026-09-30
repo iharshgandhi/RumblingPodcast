@@ -118,13 +118,17 @@ cmd_status() {
 cmd_uninstall() {
   [ "$(id -u)" -eq 0 ] || die "run with sudo: sudo rp-ctl uninstall"
   echo "==> stopping and removing units"
+  $SYSCTL disable --now rumblingpodcast-daily.timer 2>/dev/null
+  $SYSCTL stop rumblingpodcast-daily.service 2>/dev/null
   $SYSCTL disable --now rumblingpodcast-worker.service 2>/dev/null
   $SYSCTL disable --now rumblingpodcast-http.service 2>/dev/null
-  rm -f /etc/systemd/system/rumblingpodcast-*.service
+  rm -f /etc/systemd/system/rumblingpodcast-*.service \
+        /etc/systemd/system/rumblingpodcast-*.timer
   $SYSCTL daemon-reload
   $SYSCTL reset-failed 2>/dev/null
   echo "==> removing CLI"
-  rm -f "$PREFIX/bin/rp-ctl"
+  rm -f "$PREFIX/bin/rp" "$PREFIX/bin/rp-ctl"
+  rm -rf /usr/local/share/rumblingpodcast-src
   # Data is preserved by default; --purge deletes it.
   if [ "${1:-}" = "--purge" ]; then
     echo "==> purging data and models"

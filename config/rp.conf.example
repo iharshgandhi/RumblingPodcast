@@ -89,6 +89,10 @@ download_thumbnails = 1
 # match. Transcripts are always kept.
 retention_days = 30
 
+# Local time of the nightly run (24h). The installer writes a systemd
+# timer from this; you never need to touch cron.
+run_time = 02:00
+
 # How often to scan channels for new videos (hours).
 scan_interval_hours = 6
 # Pause between videos, to stay gentle on a machine running Pi-hole (seconds).

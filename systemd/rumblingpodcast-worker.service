@@ -6,6 +6,12 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+# Run as the app owner, never root. Without this the worker creates
+# root-owned lock/state files that block non-root runs and manual
+# 'rp-ctl run-once'. Override with RP_USER=... if your install differs.
+# RP_USER is substituted at install time by install.sh / rp-ctl upgrade.
+User=__RP_USER__
+Group=__RP_USER__
 ExecStart=/opt/rumblingpodcast/bin/worker
 Restart=always
 RestartSec=30

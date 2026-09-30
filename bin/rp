@@ -1,0 +1,319 @@
+#!/bin/bash
+# RumblingPodcast - https://github.com/iharshgandhi/RumblingPodcast
+# Copyright (C) 2026 Harsh Gandhi (harshgandhi.com) / Buho Smart Tools (buho.co.in)
+#
+# Licensed under the GNU General Public License v3.0 or later.
+# This is an experimental project provided "AS IS", with NO WARRANTY and no
+# liability. It contains no copyrighted material and no circumvention code.
+# See DISCLAIMER.md. You are responsible for using it lawfully.
+#
+# rp - manage RumblingPodcast entirely from the terminal.
+#
+#   rp            interactive menu (the friendly way)
+#   rp status     one-shot summary
+#   rp channels   list subscribed channels
+#   rp add <ch>   add a channel (slug, id or full URL)
+#   rp remove <ch>  remove a channel
+#   rp key set    store an OpenRouter API key
+#   rp test       verify config, key and connectivity
+#
+# Never touches Pi-hole: this only reads/writes /opt/rumblingpodcast and its
+# own systemd units.
+set -uo pipefail
+
+RP_ROOT="${RP_ROOT:-/opt/rumblingpodcast}"
+PREFIX="${PREFIX:-/usr/local}"
+CONF="$RP_ROOT/config/rp.conf"
+
+# rp-config lives next to this script's install root.
+for c in "$RP_ROOT/lib/rp-config.sh" /usr/local/share/rumblingpodcast/lib/rp-config.sh; do
+  [ -f "$c" ] && { . "$c"; CONF="$RP_ROOT/config/rp.conf"; break; }
+done
+
+# Read-only status queries never need sudo; mutating ones do. This keeps
+# "rp status" / "rp test" usable without a password prompt.
+[ "$(id -u)" -eq 0 ] && SUDO="" || SUDO="sudo"
+SYSCTL="$SUDO systemctl"
+QCTL="systemctl"   # read-only queries
+if ! systemctl is-system-running >/dev/null 2>&1; then
+  if systemctl --user is-system-running >/dev/null 2>&1; then
+    QCTL="systemctl --user"
+  else
+    QCTL="sudo -n systemctl"
+  fi
+fi
+
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
+  B=$'\033[1m'; G=$'\033[32m'; Y=$'\033[33m'; R=$'\033[31m'; C=$'\033[36m'; N=$'\033[0m'
+else
+  B=""; G=""; Y=""; R=""; C=""; N=""
+fi
+c_ok()   { printf '%s%s%s\n' "$G" "$*" "$N"; }
+c_warn() { printf '%s%s%s\n' "$Y" "$*" "$N"; }
+c_err()  { printf '%s%s%s\n' "$R" "$*" "$N" >&2; }
+c_head() { printf '\n%s%s%s\n' "$B" "$*" "$N"; }
+die()    { c_err "$*"; exit 1; }
+
+need_root() { [ "$(id -u)" -eq 0 ] || die "this needs root: retry with sudo"; }
+have_install() {
+  [ -f "$CONF" ] || die "not installed yet (no $CONF). Run: sudo rp install"
+}
+
+# ---------------------------------------------------------------- commands
+
+cmd_status() {
+  have_install
+  c_head "RumblingPodcast status"
+  printf '  %-14s %s\n' "worker" "$($QCTL is-active rumblingpodcast-worker.service 2>/dev/null || echo unknown)"
+  printf '  %-14s %s\n' "feed http" "$($QCTL is-active rumblingpodcast-http.service 2>/dev/null || echo unknown)"
+  printf '  %-14s %s\n' "version" "$(cat "$RP_ROOT/VERSION" 2>/dev/null || echo '-')"
+  c_head "Settings"
+  for k in channels summarize serve_port retention_days max_age_days; do
+    printf '  %-16s %s\n' "$k" "$(get_conf "$k")"
+  done
+  key="$(get_conf openrouter_key)"
+  printf '  %-16s %s\n' "openrouter_key" "$(mask_value openrouter_key "$key")"
+  c_head "Library"
+  printf '  %-16s %s episodes\n' "media" "$(ls "$RP_ROOT/data/meta"/*.meta 2>/dev/null | wc -l | tr -d ' ')"
+  printf '  %-16s %s\n' "audio" "$(du -sh "$RP_ROOT/data/audio" 2>/dev/null | cut -f1)"
+  printf '  %-16s %s\n' "disk free" "$(df -h / | awk 'NR==2{print $4}')"
+  printf '  %-16s %s\n' "memory free" "$(awk '/MemAvailable/{printf "%dMB", $2/1024}' /proc/meminfo 2>/dev/null)"
+  port="$(get_conf serve_port)"; port="${port:-8088}"
+  ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  c_head "Feed"
+  printf '  http://%s:%s/feed.xml\n' "${ip:-<this-host>}" "$port"
+  c_head "Recent activity"
+  "$RP_ROOT/bin/worker" --log 2>/dev/null | tail -8 || tail -8 "$RP_ROOT/logs/rp.log" 2>/dev/null
+}
+
+cmd_channels() {
+  have_install
+  c_head "Channels"
+  local n=0 ch
+  while read -r ch; do
+    [ -n "$ch" ] || continue
+    n=$((n+1)); printf '  %d. %s\n' "$n" "$ch"
+  done < <(list_channels)
+  # Always exit 0; a false test must not become the script's exit status.
+  if [ "$n" = 0 ]; then c_warn "  (none yet — add with: rp add <channel>)"; fi
+  return 0
+}
+
+cmd_add() {
+  have_install; need_root
+  local c
+  [ -n "${1:-}" ] || die "usage: rp add <channel-slug|id|url>"
+  c="$(normalize_channel "$1")" || die "could not read a channel from '$1'"
+  if channel_present "$c"; then
+    c_warn "already subscribed: $c"; return 0
+  fi
+  add_channel "$c" >/dev/null
+  c_ok "added: $c"
+  c_warn "it will be picked up on the next scan (within $(get_conf scan_interval_hours)h) or now: sudo rp run"
+}
+
+cmd_remove() {
+  have_install; need_root
+  local c
+  [ -n "${1:-}" ] || die "usage: rp remove <channel-slug|id|url>"
+  c="$(normalize_channel "$1")" || die "could not read a channel from '$1'"
+  if ! channel_present "$c"; then
+    c_warn "not subscribed: $c"; return 0
+  fi
+  remove_channel "$c"
+  c_ok "removed: $c"
+  c_warn "existing episodes are kept; purge them with: sudo rp clean"
+}
+
+cmd_key() {
+  have_install; need_root
+  case "${1:-}" in
+    show)
+      k="$(get_conf openrouter_key)"
+      [ -z "$k" ] && { c_warn "no key set"; return 0; }
+      printf '  %s\n' "$(mask_value openrouter_key "$k")" ;;
+    clear)
+      set_conf openrouter_key ""
+      c_ok "key cleared (summaries fall back to extractive)" ;;
+    *)
+      need_root
+      printf '  Paste your OpenRouter API key (input hidden): '
+      local k; read -rs k; echo
+      [ -z "$k" ] && die "empty key"
+      case "$k" in sk-or-v1-*) ;; *) die "that does not look like an OpenRouter key (expected sk-or-v1-…)" ;; esac
+      set_conf openrouter_key "$k"
+      set_conf summarize openrouter
+      c_ok "key stored (mode 600) and summarizer set to openrouter"
+      c_warn "only free-tier models are ever selected" ;;
+  esac
+}
+
+cmd_summarize() {
+  have_install; need_root
+  case "${1:-}" in
+    none|local|openrouter)
+      set_conf summarize "$1"; c_ok "summarizer: $1"
+      [ "$1" = local ] && c_warn "local models need ~300MB+ free RAM" ;;
+    *)
+      die "usage: rp summarize <none|local|openrouter>" ;;
+  esac
+}
+
+cmd_test() {
+  have_install
+  c_head "Config validation"
+  if validate; then c_ok "config is valid"; else c_warn "config has problems (see above)"; fi
+
+  c_head "Dependencies"
+  for t in ffmpeg jq curl python3 git; do
+    command -v "$t" >/dev/null && c_ok "$t present" || c_warn "$t MISSING"
+  done
+  [ -x "$RP_ROOT/bin/yt-dlp" ] && c_ok "yt-dlp present" || c_warn "yt-dlp MISSING"
+
+  c_head "Pi-hole (must be untouched)"
+  if command -v pihole >/dev/null; then
+    p="$($QCTL is-active pihole-FTL 2>/dev/null)"
+    [ "$p" = active ] && c_ok "pihole-FTL $p" || c_warn "pihole-FTL $p"
+  else
+    c_ok "pi-hole not installed here (fine)"
+  fi
+  port="$(get_conf serve_port)"; port="${port:-8088}"
+  case "$port" in 80|443|53) c_err "serve_port $port COLLIDES with pi-hole" ;;
+    *) c_ok "serve_port $port does not collide with pi-hole (80/443/53)" ;; esac
+
+  c_head "Feed"
+  if $QCTL is-active --quiet rumblingpodcast-http.service 2>/dev/null; then
+    code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/feed.xml" 2>/dev/null)"
+    [ "$code" = 200 ] && c_ok "feed.xml returns 200" || c_warn "feed.xml returned $code"
+  else
+    c_warn "http service is not running"
+  fi
+
+  c_head "OpenRouter"
+  k="$(get_conf openrouter_key)"
+  case "$k" in
+    ""|sk-or-REPLACE_ME) c_warn "no key set — run: rp key set" ;;
+    *)
+      n="$("$RP_ROOT/bin/openrouter" --models 2>/dev/null | wc -l | tr -d ' ')"
+      [ "${n:-0}" -gt 0 ] && c_ok "key valid, $n free model(s) available" \
+                         || c_warn "key set but no free models listed" ;;
+  esac
+}
+
+cmd_run()      { have_install; need_root; c_warn "processing (this can take a while)…"; "$RP_ROOT/bin/worker" --once; c_ok "done"; }
+cmd_pause()    { have_install; need_root; $SYSCTL stop rumblingpodcast-worker rumblingpodcast-http; c_ok "paused"; }
+cmd_resume()   { have_install; need_root; $SYSCTL start rumblingpodcast-worker rumblingpodcast-http; c_ok "running"; }
+cmd_enable()   { have_install; need_root; $SYSCTL enable --now rumblingpodcast-worker rumblingpodcast-http; c_ok "enabled at boot"; }
+cmd_disable()  { have_install; need_root; $SYSCTL disable --now rumblingpodcast-worker; c_warn "worker off (feed still served)"; }
+
+cmd_clean() {
+  have_install; need_root
+  d="$(get_conf retention_days)"; d="${d:-30}"
+  c_warn "removing downloaded media older than ${d} days"
+  "$RP_ROOT/bin/worker" --retention
+  c_ok "retention sweep done (transcripts and summaries are kept)"
+}
+
+cmd_install() {
+  [ "$(id -u)" -eq 0 ] || die "run: sudo rp install"
+  RP_REPO_DIR="$(dirname "$0")"
+  [ -f "$RP_REPO_DIR/install.sh" ] || die "cannot locate install.sh next to rp"
+  exec bash "$RP_REPO_DIR/install.sh"
+}
+
+cmd_uninstall() {
+  need_root
+  if [ "${1:-}" = "--purge" ]; then
+    printf 'Delete ALL data including transcripts and audio? [y/N] '; read -r a
+    [ "$a" = y ] || { c_warn "cancelled"; return 0; }
+  fi
+  "$RP_ROOT/bin/rp-ctl" uninstall "${1:-}"
+}
+
+# ---------------------------------------------------------------- menu
+
+menu() {
+  need_root
+  while :; do
+    c_head "RumblingPodcast"
+    cat <<EOF
+  ${C}1${N}  status                 what's set up, what's running
+  ${C}2${N}  channels               list subscribed channels
+  ${C}3${N}  add a channel          paste a Rumble channel URL or name
+  ${C}4${N}  remove a channel
+  ${C}5${N}  set OpenRouter key     for AI summaries (free models only)
+  ${C}6${N}  summarizer             none / openrouter / local
+  ${C}7${N}  run now                process pending videos immediately
+  ${C}8${N}  test                   check config, deps, feed, pi-hole
+  ${C}9${N}  clean old media        apply the ${N}$(get_conf retention_days)-day retention now
+  ${C}p${N}  pause / resume         stop or start everything
+  ${C}u${N}  uninstall              remove (keeps data)
+  ${C}q${N}  quit
+EOF
+    printf '\n  choose: '
+    read -r a
+    case "$a" in
+      1) cmd_status ;;
+      2) cmd_channels ;;
+      3) printf '   channel URL or name: '; read -r x; cmd_add "$x" ;;
+      4) printf '   channel to remove: ';  read -r x; cmd_remove "$x" ;;
+      5) cmd_key set ;;
+      6) printf '   [1] none  [2] openrouter  [3] local : '; read -r x
+         case "$x" in 1) cmd_summarize none;; 2) cmd_summarize openrouter;; 3) cmd_summarize local;; *) c_warn "unchanged";; esac ;;
+      7) cmd_run ;;
+      8) cmd_test ;;
+      9) cmd_clean ;;
+      p|P) if $QCTL is-active --quiet rumblingpodcast-worker; then cmd_pause; else cmd_resume; fi ;;
+      u|U) cmd_uninstall ;;
+      q|Q|'') return 0 ;;
+      *) c_warn "unknown choice" ;;
+    esac
+  done
+}
+
+usage() {
+  cat <<EOF
+${B}rp${N} - manage RumblingPodcast
+
+  ${B}rp${N}                      interactive menu
+  ${B}rp status${N}               units, settings, library, feed URL
+  ${B}rp channels${N}             list channels
+  ${B}rp add${N} <channel>        add a channel (slug, id, or URL)
+  ${B}rp remove${N} <channel>     remove a channel
+  ${B}rp key set${N}              store an OpenRouter API key
+  ${B}rp key show${N}|${N}clear        view or erase the stored key
+  ${B}rp summarize${N} <mode>     none | openrouter | local
+  ${B}rp run${N}                  process pending videos now
+  ${B}rp test${N}                 self-check everything
+  ${B}rp clean${N}                run the retention sweep now
+  ${B}rp pause${N}|${N}resume          stop / start services
+  ${B}rp enable${N}|${N}disable        start at boot / don't
+  ${B}rp install${N}              (re)install from the repo
+  ${B}rp uninstall${N} [--purge]   remove it
+
+Channels accept any of:  usawatchdog · 732873 · rumble.com/c/usawatchdog
+                         rumble.com/subscriptions?creator=_c732873
+EOF
+}
+
+case "${1:-}" in
+  "")            [ -f "$CONF" ] && menu || usage ;;
+  menu)          menu ;;
+  status)        cmd_status ;;
+  channels|list) cmd_channels ;;
+  add)           shift; cmd_add "$@" ;;
+  remove|rm)     shift; cmd_remove "$@" ;;
+  key)           shift; cmd_key "$@" ;;
+  summarize)     shift; cmd_summarize "$@" ;;
+  run|run-once)  cmd_run ;;
+  test|check)    cmd_test ;;
+  clean|retention) cmd_clean ;;
+  pause)         cmd_pause ;;
+  resume|start)  cmd_resume ;;
+  enable)        cmd_enable ;;
+  disable)       cmd_disable ;;
+  install)       cmd_install ;;
+  uninstall)     shift; cmd_uninstall "$@" ;;
+  help|-h|--help) usage ;;
+  *) c_err "unknown command: $1"; echo; usage; exit 2 ;;
+esac
