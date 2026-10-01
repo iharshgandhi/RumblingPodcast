@@ -275,8 +275,17 @@ cp -r "$SRC_DIR/bin" "$SRC_DIR/lib" "$SRC_DIR/systemd" "$RP_ROOT/" 2>/dev/null
 cp "$SRC_DIR/VERSION" "$RP_ROOT/" 2>/dev/null
 chmod +x "$RP_ROOT/bin/"* 2>/dev/null
 
+# yt-dlp ships as a standalone binary rather than a distro package: the Debian
+# copy is far older, and the PyInstaller build needs no Python on the target.
+# That also means apt knows nothing about it, so refresh it here rather than
+# skipping: a stale yt-dlp breaks extractors quietly, and this is the natural
+# moment to pick up a fix. rp-update verifies the new binary before it replaces
+# a working one, and is safe to run while other tools share the file.
 c_ok "installing yt-dlp (standalone binary — no Python needed for downloads)"
-if [ ! -x "$RP_ROOT/bin/yt-dlp" ]; then
+if [ -x "$RP_ROOT/bin/rp-update" ]; then
+  "$RP_ROOT/bin/rp-update" yt-dlp 2>&1 | sed 's/^/  /' \
+    || c_warn "yt-dlp refresh failed; keeping the version already installed"
+else
   case "$ARCH" in
     aarch64) A="_aarch64" ;;
     armv7l)  A="_armv7l" ;;
@@ -287,7 +296,6 @@ if [ ! -x "$RP_ROOT/bin/yt-dlp" ]; then
     || die "could not download yt-dlp"
   chmod 755 "$RP_ROOT/bin/yt-dlp"
 fi
-c_info "yt-dlp $("$RP_ROOT/bin/yt-dlp" --version 2>/dev/null | head -1)"
 
 # ---- config -------------------------------------------------------------
 CONF="$RP_ROOT/config/rp.conf"
@@ -358,8 +366,9 @@ RandomizedDelaySec=300
 WantedBy=timers.target
 UNIT
 
-install -m 755 "$RP_ROOT/bin/rp"     /usr/local/bin/rp
-install -m 755 "$RP_ROOT/bin/rp-ctl" /usr/local/bin/rp-ctl
+install -m 755 "$RP_ROOT/bin/rp"        /usr/local/bin/rp
+install -m 755 "$RP_ROOT/bin/rp-ctl"    /usr/local/bin/rp-ctl
+install -m 755 "$RP_ROOT/bin/rp-update" /usr/local/bin/rp-update 2>/dev/null || true
 chown -R "$APP_USER:$APP_USER" "$RP_ROOT" 2>/dev/null || true
 
 systemctl daemon-reload

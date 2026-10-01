@@ -295,6 +295,7 @@ ${B}rp${N} - manage RumblingPodcast
   ${B}rp clean${N}                run the retention sweep now
   ${B}rp pause${N}|${N}resume          stop / start services
   ${B}rp enable${N}|${N}disable        start at boot / don't
+  ${B}rp update${N}               refresh yt-dlp to the latest release
   ${B}rp install${N}              (re)install from the repo
   ${B}rp uninstall${N} [--purge]   remove it
 
@@ -320,6 +321,14 @@ case "${1:-}" in
   enable)        cmd_enable ;;
   disable)       cmd_disable ;;
   install)       cmd_install ;;
+  # Resolve rp-update next to this script: rp may be run from /usr/local/bin
+  # while the real copy lives in the app's bin/, and RP_BIN is not set here.
+  update|upgrade) shift
+                 self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+                 updater="$self_dir/rp-update"
+                 [ -x "$updater" ] || updater="$(command -v rp-update 2>/dev/null)"
+                 [ -x "$updater" ] || { c_err "rp-update is missing from the install"; exit 1; }
+                 exec "$updater" "${1:-yt-dlp}" ;;
   uninstall)     shift; cmd_uninstall "$@" ;;
   help|-h|--help) usage ;;
   *) c_err "unknown command: $1"; echo; usage; exit 2 ;;

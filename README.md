@@ -226,6 +226,27 @@ remember anything:
 | `sudo rp uninstall` | Remove it (keeps your data) |
 | `sudo rp uninstall --purge` | Remove everything, including downloads |
 
+### Update yt-dlp
+
+```bash
+rp update
+```
+
+yt-dlp ships inside RumblingPodcast as a standalone binary rather than a
+distro package, because the Debian copy is much older and the standalone
+build needs no Python on the machine. The trade-off is that `apt` knows
+nothing about it, so this command is how it gets refreshed.
+
+It downloads the latest release, checks the new binary actually runs, and
+only then replaces the old one — atomically, so anything using the file sees
+either the old version or the new one, never a half-written file. A working
+version is never lost: if the download fails or the new binary will not
+start, the existing one stays in place and says so. The previous binary is
+kept as `yt-dlp.bak`.
+
+You are on the latest release if it prints "already up to date". Re-running
+the installer also refreshes yt-dlp, so an upgrade picks up any upstream fix.
+
 ### Channels accept any of these
 
 ```

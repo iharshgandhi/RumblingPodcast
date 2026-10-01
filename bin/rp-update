@@ -1,0 +1,140 @@
+#!/bin/bash
+# RumblingPodcast - https://github.com/iharshgandhi/RumblingPodcast
+# Copyright (C) 2026 Harsh Gandhi (harshgandhi.com) / Buho Smart Tools (buho.co.in)
+#
+# Licensed under the GNU General Public License v3.0 or later.
+# This is an experimental project provided "AS IS", with NO WARRANTY and no
+# liability. You are responsible for using it lawfully.
+#
+# Refresh the bundled yt-dlp binary.
+#
+# yt-dlp ships as a standalone PyInstaller build inside the app rather than a
+# distro package: the Debian copy is far older, and a PyInstaller build needs no
+# Python interpreter or pip on the target. The cost is that apt knows nothing
+# about it, so this script is the update path.
+#
+# The swap is atomic (write a new file, then rename over the old one), so any
+# symlink pointing at it picks up the new version automatically. Other tools on
+# the machine may share that binary - LocalYTManager does - so nothing is
+# restarted here and no service is disturbed.
+
+set -uo pipefail
+
+RP_BIN="${RP_BIN:-/opt/rumblingpodcast/bin}"
+YTDLP="$RP_BIN/yt-dlp"
+URL_BASE="https://github.com/yt-dlp/yt-dlp/releases/latest/download"
+
+say() { printf '%s\n' "$*"; }
+info() { printf '  %s\n' "$*"; }
+warn() { printf '  warning: %s\n' "$*" >&2; }
+die() { printf 'error: %s\n' "$*" >&2; exit 1; }
+
+current_version() {
+  # A broken binary prints PyInstaller extraction errors to stderr; the version
+  # is the last line that looks like a date. TMPDIR matters on a machine whose
+  # /tmp is a small tmpfs.
+  TMPDIR="${TMPDIR:-/tmp}" "$YTDLP" --version 2>/dev/null \
+    | tr -d '\r' | grep -E '^[0-9]{4}\.[0-9]{2}\.[0-9]{2}' | tail -1
+}
+
+latest_version() {
+  curl -fsSL --max-time 30 --retry 2 \
+    "https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest" 2>/dev/null \
+    | sed -n 's/.*"tag_name":[[:space:]]*"v\{0,1\}\([^"]*\)".*/\1/p' | head -1
+}
+
+arch_asset() {
+  case "$(uname -m)" in
+    aarch64|arm64) printf 'yt-dlp_linux_aarch64' ;;
+    x86_64|amd64)  printf 'yt-dlp_linux' ;;
+    armv7l)        printf 'yt-dlp_linux_armv7l' ;;
+    *)             printf '' ;;
+  esac
+}
+
+usage() {
+  cat <<EOF
+usage: rp update [yt-dlp]
+
+  update yt-dlp    Refresh the bundled yt-dlp binary (the default)
+
+Other things to update:
+  RumblingPodcast itself is a git checkout. To upgrade, pull the repository
+  and re-run the installer. This command does not touch the app's own code,
+  because it may have local edits.
+EOF
+}
+
+do_update_ytdlp() {
+  [ -x "$YTDLP" ] || die "yt-dlp is not installed at $YTDLP - run the installer first"
+
+  local asset have want
+  asset="$(arch_asset)"
+  [ -n "$asset" ] || die "unsupported architecture: $(uname -m)"
+
+  have="$(current_version)"
+  [ -n "$have" ] || warn "could not read the installed version"
+  want="$(latest_version)"
+  if [ -z "$want" ]; then
+    warn "could not reach GitHub to check for the latest release; updating anyway"
+  fi
+
+  say "yt-dlp"
+  info "installed: ${have:-unknown}"
+  info "latest:    ${want:-unknown (check failed)}"
+
+  if [ -n "$have" ] && [ -n "$want" ] && [ "$have" = "$want" ]; then
+    say "  already up to date, nothing to do"
+    return 0
+  fi
+
+  # Download beside the target so the rename stays on the same filesystem and
+  # is therefore atomic.
+  local new="$YTDLP.new.$$"
+  local backup="$YTDLP.bak"
+  rm -f "$new"
+
+  say "  downloading ${asset}"
+  if ! curl -fL --retry 3 --connect-timeout 20 --max-time 600 \
+        --progress-bar -o "$new" "$URL_BASE/$asset"; then
+    rm -f "$new"
+    die "download failed; the existing binary is untouched"
+  fi
+
+  chmod 755 "$new"
+  [ -s "$new" ] || { rm -f "$new"; die "downloaded file is empty"; }
+
+  # Smoke test the new binary before it replaces a working one. yt-dlp fails
+  # loudly if it cannot run at all, and a truncated download returns non-zero.
+  info "checking the new binary runs"
+  local probe
+  probe="$(TMPDIR="${TMPDIR:-/tmp}" "$new" --version 2>/dev/null \
+           | tr -d '\r' | grep -E '^[0-9]{4}\.[0-9]{2}\.[0-9]{2}' | tail -1)"
+  if [ -z "$probe" ]; then
+    rm -f "$new"
+    die "the downloaded binary did not run; keeping the existing version"
+  fi
+
+  # Keep one rollback copy, then swap atomically. rename() within one directory
+  # is atomic, so anything using the binary sees either the old or new file,
+  # never a partial one.
+  cp -p "$YTDLP" "$backup" 2>/dev/null || true
+  if ! mv -f "$new" "$YTDLP"; then
+    rm -f "$new"
+    die "could not replace the binary; the existing version is untouched"
+  fi
+
+  say "  updated: ${have:-unknown} -> $probe"
+  [ -f "$backup" ] && info "rollback copy: $backup"
+  return 0
+}
+
+main() {
+  case "${1:-yt-dlp}" in
+    -h|--help|help) usage ;;
+    yt-dlp)         do_update_ytdlp ;;
+    *)              printf 'unknown target: %s\n\n' "$1" >&2; usage >&2; exit 2 ;;
+  esac
+}
+
+main "$@"
