@@ -72,7 +72,10 @@ gen_channel_feed() {
   lang="$(cfg podcast_language en)"
   cutoff="$(subtract_days "$(now_epoch)" "$(cfg retention_days 30)")"
 
-  while IFS='|' read -r id title dur pubdate url audio summary_path thumb ch; do
+  # Unit Separator: episode titles are arbitrary text and very often contain a
+  # pipe ("TAROT | October 2026"), which used to split the row and silently
+  # drop the episode from the feed.
+  while IFS=$'\x1f' read -r id title dur pubdate url audio summary_path thumb ch; do
     [ -n "$id" ] || continue
     [ "$ch" = "$slug" ] || continue          # only this channel's episodes
     [ -f "$audio" ] || continue              # audio gone => drop episode
@@ -274,9 +277,15 @@ list_meta_sorted() {
     audio="$RP_DATA/audio/${id}.m4a"
     summary="$RP_DATA/summaries/${id}.txt"
     thumb="$RP_DATA/meta/${id}.jpg"
-    printf '%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
+    # Strip any stray separators so a value can never break the row.
+    id=${id//$'\x1f'/ }; title=${title//$'\x1f'/ }
+    dur=${dur//$'\x1f'/ }; pubdate=${pubdate//$'\x1f'/ }
+    url=${url//$'\x1f'/ }; audio=${audio//$'\x1f'/ }
+    summary_path=${summary_path//$'\x1f'/ }; thumb=${thumb//$'\x1f'/ }
+    ch=${ch//$'\x1f'/ }
+    printf '%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s\n' \
       "$id" "$title" "$dur" "$pubdate" "$url" "$audio" "$summary" "$thumb" "$channel"
-  done | sort -t'|' -k4,4rn
+  done | sort -t$'\x1f' -k4,4rn
 }
 
 # Backfill: attribute legacy episodes to the only channel they can belong to.
