@@ -120,6 +120,17 @@ exact address, and `rp status` shows it later.
 
 ![The Feeds tab: one card per channel, with a Copy button next to each feed URL](docs/screenshot-feeds.png)
 
+### Check for new episodes now
+
+You do not have to wait for the nightly run. Press **Check for new episodes
+now** and it starts a scan immediately. The button disables itself and tells
+you it has started, because a scan can take several minutes — downloading
+audio, pulling transcripts and summarising. Reload the page in a while to see
+the new episodes.
+
+The nightly timer and this button never run at the same time, so pressing it
+while an automatic run is already in progress is safe.
+
 ### Copy a feed URL
 
 Each channel has its own feed URL in a box, with a **Copy** button beside it.

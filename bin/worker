@@ -53,7 +53,13 @@ process_video() {
   local url="https://rumble.com${relurl}"
   local base="$id"
 
-  if [ -f "$RP_DATA/meta/${base}.meta" ] && [ "$(cfg skip_existing 1)" = "1" ]; then
+  # Skip only if the episode is genuinely COMPLETE. Keying this on the .meta
+  # file alone meant a run that died mid-download (or that ran before the
+  # channel was recorded) left a .meta behind, and the episode was then never
+  # retried and never appeared in any feed.
+  if [ -f "$RP_DATA/meta/${base}.meta" ] \
+     && [ -s "$RP_DATA/audio/${base}.m4a" ] \
+     && [ "$(cfg skip_existing 1)" = "1" ]; then
     log_info "already processed: $title"
     return 0
   fi
@@ -153,6 +159,10 @@ retention_sweep() {
 }
 
 main() {
+  # The daemon runs for days, so it must not hold the lock that a one-shot
+  # scan needs: otherwise "refresh now" could never start while it is alive.
+  # A separate lock still stops two daemons racing each other.
+  RP_LOCK="$RP_LOCK.daemon"
   acquire_lock || exit 0
   log_info "worker starting (pid $$), Pi-hole priority preserved via nice/ionice"
 

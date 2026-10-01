@@ -28,6 +28,8 @@ import glob
 import socket
 import argparse
 import urllib.parse
+import subprocess
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -243,9 +245,65 @@ class FeedHandler(BaseHTTPRequestHandler):
         self.send_json({"ok": True, "config": safe})
 
     def do_POST(self):
-        if self.path.split("?", 1)[0] == "/api/config":
+        path = self.path.split("?", 1)[0]
+        if path == "/api/config":
             return self.api_config()
+        if path == "/api/refresh":
+            return self.api_refresh()
         return self.send_json({"error": "not found"}, 404)
+
+    def api_refresh(self):
+        """Kick off one scan now, instead of waiting for the nightly timer.
+
+        A full fetch can take many minutes (audio download, transcription,
+        summarising), so this starts it in the background and reports back
+        immediately rather than holding the browser open.
+        """
+        sid = self.cookie("rp_sid")
+        token = self.headers.get("X-CSRF-Token")
+        if not self.server.sessions.valid_csrf(sid, token):
+            return self.send_json(
+                {"error": "invalid or missing CSRF token - reload the page"}, 403)
+
+        # Never stack runs: the worker takes a lock and exits if one is live.
+        if self.server.refresh_running:
+            return self.send_json(
+                {"error": "a scan is already running - try again shortly"}, 409)
+
+        self.server.refresh_running = True
+        worker = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              "worker")
+        # Derive the app root from the data dir the server was started with,
+        # rather than guessing via "..": data/ is a sibling of run/ and logs/,
+        # but resolving through a symlinked data dir would land in the wrong
+        # place and the worker would fail silently.
+        app_root = os.path.dirname(os.path.abspath(self.server.root))
+        logdir = os.path.join(app_root, "logs")
+        tmpdir = os.path.join(app_root, "run", "tmp")
+
+        def run():
+            try:
+                os.makedirs(logdir, exist_ok=True)
+                os.makedirs(tmpdir, exist_ok=True)
+                env = dict(os.environ)
+                env["TMPDIR"] = tmpdir
+                env["RP_CONFIG"] = self.server.conf
+                env["RP_ROOT"] = app_root
+                out = open(os.path.join(logdir, "refresh.log"), "ab")
+                try:
+                    subprocess.run([worker, "--once"], stdout=out, stderr=out,
+                                   env=env, timeout=6 * 3600, check=False)
+                finally:
+                    out.close()
+            except Exception:
+                pass
+            finally:
+                self.server.refresh_running = False
+
+        threading.Thread(target=run, daemon=True).start()
+        self.send_json({"ok": True,
+                        "message": "Scan started. This can take a few "
+                                   "minutes; reload in a little while."})
 
     def do_HEAD(self):
         self.serve(head_only=True)
@@ -333,6 +391,8 @@ class Server(ThreadingHTTPServer):
     conf = "/opt/rumblingpodcast/config/rp.conf"
     port = 8088
     sessions = None  # rp_api.Sessions, set in main()
+    # Guards the manual-refresh button so two scans cannot overlap.
+    refresh_running = False
 
     def public_base(self):
         """Base URL to hand the browser, so copied feed links actually work."""

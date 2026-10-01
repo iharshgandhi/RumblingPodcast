@@ -59,7 +59,10 @@ PAGE = r"""<!doctype html>
  button{cursor:pointer;font:inherit;border-radius:8px;padding:.55rem .9rem;border:1px solid var(--line);
         background:var(--card2);color:var(--fg)}
  button:hover{border-color:#3a4150}
- button.primary{background:var(--acc);border-color:var(--acc);color:#06101f;font-weight:600}
+ button.secondary{background:var(--bg);color:var(--fg)}
+button.secondary:hover{border-color:#3a4150}
+button:disabled{opacity:.55;cursor:default}
+button.primary{background:var(--acc);border-color:var(--acc);color:#06101f;font-weight:600}
  button.ok{background:var(--ok);border-color:var(--ok);color:#04150d;font-weight:600}
  button.ghost{background:transparent}
  button.sm{padding:.3rem .6rem;font-size:.8rem}
@@ -110,6 +113,10 @@ PAGE = r"""<!doctype html>
       <h2>Your podcast feeds</h2>
       <p class="hint">Copy a link and paste it into your podcast app
         (Apple Podcasts: Libraries → + → Add a Podcast by URL).</p>
+      <div class="row" style="margin:.7rem 0">
+        <button id="refresh" class="secondary">Check for new episodes now</button>
+        <span id="refreshMsg" class="hint"></span>
+      </div>
       <div id="channels"><p class="hint">Loading…</p></div>
     </div>
     <div class="card">
@@ -375,6 +382,22 @@ function renderApi() {
 
 $("#saveAll").addEventListener("click", saveAll);
 $("#reload").addEventListener("click", () => load());
+
+/* Manual refresh: run one scan now instead of waiting for the nightly timer.
+   The scan runs in the background, so the button disables itself and says so
+   rather than appearing to hang. */
+$("#refresh").addEventListener("click", async () => {
+  const btn = $("#refresh"), msg = $("#refreshMsg");
+  btn.disabled = true;
+  msg.textContent = "Starting…";
+  try {
+    const r = await api("/api/refresh", { method: "POST" });
+    msg.textContent = r.message || "Scan started.";
+  } catch (e) {
+    msg.textContent = "Could not start: " + e.message;
+    btn.disabled = false;
+  }
+});
 $("#chanAdd").addEventListener("click", () => {
   const v = $("#chanNew").value.trim();
   if (!v) return;
