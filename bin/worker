@@ -181,7 +181,7 @@ main() {
       local days; days="$(cfg max_age_days 7)"
       ensure_channel_meta "$ch"
       log_info "scanning channel: $ch (last ${days}d)"
-      while IFS=$'\t' read -r epoch dur upload title relurl; do
+      while IFS=$'\t' read -r epoch dur upload title relurl liveflag; do
         [ -n "$relurl" ] || continue
         local id; id="$(printf '%s' "$relurl" | sed -n 's#^/\(v[a-z0-9]*\)-.*#\1#p')"
         [ -n "$id" ] || id="$(safe_name "$relurl")"
@@ -203,7 +203,7 @@ case "${1:-}" in
     channels="$(cfg channels usawatchdog)"
     for ch in $channels; do
       ensure_channel_meta "$ch"
-      while IFS=$'\t' read -r epoch dur upload title relurl; do
+      while IFS=$'\t' read -r epoch dur upload title relurl liveflag; do
         [ -n "$relurl" ] || continue
         id="$(printf '%s' "$relurl" | sed -n 's#^/\(v[a-z0-9]*\)-.*#\1#p')"
         process_video "$id" "$title" "$dur" "$epoch" "$relurl" "$ch"

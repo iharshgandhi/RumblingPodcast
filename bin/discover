@@ -47,11 +47,20 @@ fetch_channel_feed() {
   local slug="$1" dest="$2" tmp page code
   tmp="$(mktemp)"
 
+  # Fetch the plain channel page, NOT /videos.
+  #
+  # Rumble omits livestream DVRs from the /videos tab: for BeyondMystic the
+  # /videos feed topped out at 2026-09-05 while the main channel page carried
+  # streams through 2026-09-30. Completed lives appear there with
+  # live_streamed_on set and livestream_has_dvr true, and their upload_date is
+  # when the recording finished. A channel that mostly streams therefore looks
+  # empty on /videos.
+  #
   # Numeric ids (from ...?creator=_c732873) resolve via the numeric channel URL.
   local base
   case "$slug" in
-    ''|*[!0-9]*) base="https://rumble.com/c/${slug}/videos" ;;
-    *)            base="https://rumble.com/c/c-${slug}/videos" ;;
+    ''|*[!0-9]*) base="https://rumble.com/c/${slug}" ;;
+    *)            base="https://rumble.com/c/c-${slug}" ;;
   esac
 
   # Rumble rate-limits and occasionally returns a challenge page, so retry a few
@@ -114,11 +123,14 @@ list_recent_videos() {
     | select(.upload_date != null)
     | ( .upload_date | sub("\\+00:00$"; "Z") | fromdateiso8601 ) as $epoch
     | select($epoch >= $since)
+    | ( if (.livestream_has_dvr == true) or (.live_datetime != null)
+        then 1 else 0 end ) as $live
     | [ ($epoch|tostring),
         (.duration // 0 | tostring),
         .upload_date,
         (.title // "Untitled"),
-        (.relative_url // .url // "")
+        (.relative_url // .url // ""),
+        ($live|tostring)
       ] | @tsv
   ' "$tmpitems.items" 2>/dev/null | sort -rn -k1,1
 
