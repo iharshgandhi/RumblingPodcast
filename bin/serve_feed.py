@@ -35,6 +35,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import rp_api
+import patio_theme
 import rp_ui
 
 DESCRIPTIONS = {
@@ -389,6 +390,7 @@ class FeedHandler(BaseHTTPRequestHandler):
             _, csrf = self.ensure_session()
             keys = json.dumps([f[0] for f in rp_api.FIELDS])
             page = (rp_ui.PAGE
+                    .replace("__THEME__", patio_theme.THEME_CSS)
                     .replace("__CSRF__", csrf)
                     .replace("__DATA_KEYS__", keys))
             return self.send_bytes(page.encode("utf-8"),

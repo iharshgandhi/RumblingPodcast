@@ -18,236 +18,179 @@ PAGE = r"""<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>RumblingPodcast</title>
+<style id="patio">__THEME__</style>
 <style>
-/* Palette and shape taken from the Pi-hole web interface, so this page sits
-   next to it without looking like a different product. Colours sampled from
-   Pi-hole's own default-light.css / default-dark.css and the login page. */
-:root{
-  --acc:#3c8dbc;          /* Pi-hole navbar blue */
-  --acc-dk:#367fa9;
-  --line:#bdc3c7;
-  --ok:#5cb85c;
-  --warn:#f0ad4e;
-  --err:#d9534f;
-  --bg:#ecf0f5;           /* the usual Pi-hole page background */
-  --panel:#ffffff;
-  --panel2:#f5f7fa;
-  --fg:#333c43;
-  --mut:#737c84;
-  --radius:4px;           /* Pi-hole uses barely-rounded corners */
-  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-}
-*{box-sizing:border-box}
+/* Project layer only. The design system is the Patio theme above; this adds
+   the episode list and the tab strip, which PiHome has no equivalent for. */
 .hidden{display:none !important}
-body{margin:0;color:var(--fg);background:var(--bg);
-     font:14px/1.55 "Source Sans Pro","Helvetica Neue",Helvetica,Arial,sans-serif}
-/* ---- top bar, modelled on Pi-hole's fixed navbar ---- */
-header{background:var(--acc);color:#fff;box-shadow:0 1px 2px rgba(0,0,0,.18);
-       position:sticky;top:0;z-index:20}
-header .bar{max-width:78rem;margin:0 auto;display:flex;align-items:center;
-            gap:.9rem;padding:.6rem 1rem;flex-wrap:wrap}
-header h1{margin:0;font-size:1.15rem;font-weight:600;letter-spacing:.01em}
-header .sub{color:#d6e6f2;font-size:.8rem}
-header .grow{flex:1}
-nav{display:flex;gap:.15rem;flex-wrap:wrap}
-nav button{background:transparent;border:0;color:#fff;padding:.45rem .85rem;
-  border-radius:var(--radius);cursor:pointer;font:inherit;font-weight:600;
-  font-size:.9rem}
-nav button:hover{background:rgba(0,0,0,.12)}
-nav button.on{background:var(--acc-dk);box-shadow:inset 0 -2px 0 rgba(0,0,0,.25)}
-main{max-width:78rem;margin:0 auto;padding:1.25rem 1rem 4rem}
-h2{margin:0 0 .3rem;font-size:1.06rem;font-weight:600}
-h3{margin:0 0 .2rem;font-size:.95rem;font-weight:600}
-.hint{color:var(--mut);font-size:.83rem;margin:0 0 .9rem}
-/* ---- panels ---- */
-.card{background:var(--panel);border:1px solid var(--line);border-top:0;
-      border-radius:var(--radius);padding:1rem;margin-bottom:1rem;
-      box-shadow:0 1px 1px rgba(0,0,0,.06)}
-.card>h2{padding-bottom:.5rem;margin-bottom:.7rem;border-bottom:1px solid #e3e7ea}
-/* ---- channel row ---- */
-.ch{display:flex;gap:1rem;align-items:flex-start;padding:.9rem;
-    background:var(--panel2);border:1px solid #dfe3e7;border-radius:var(--radius);
-    margin-bottom:.6rem;flex-wrap:wrap}
-.ch img{width:60px;height:60px;border-radius:50%;object-fit:cover;background:#dfe3e7;flex:none}
-.ch .info{flex:1 1 14rem;min-width:0}
-.ch .nm{font-weight:600;overflow-wrap:anywhere}
-.ch .ct{color:var(--mut);font-size:.82rem}
-.copyrow{display:flex;gap:.4rem;margin-top:.5rem;flex-wrap:wrap}
-input[type=text],input[type=number],input[type=password],select,textarea{
-  background:#fff;border:1px solid var(--line);color:var(--fg);border-radius:var(--radius);
-  padding:.5rem .65rem;font:inherit;width:100%}
-input:focus,select:focus,textarea:focus{
-  outline:0;border-color:var(--acc);box-shadow:0 0 0 2px rgba(60,141,188,.22)}
-.copyrow input{flex:1 1 18rem;min-width:12rem;font-family:var(--mono);font-size:.82rem}
-button{cursor:pointer;font:inherit;border-radius:var(--radius);padding:.5rem .9rem;
-  border:1px solid var(--line);background:#fff;color:var(--fg)}
-button:hover{background:var(--panel2);border-color:#aab2b8}
-button:disabled{opacity:.6;cursor:default}
-button.primary{background:var(--acc);border-color:var(--acc);color:#fff;font-weight:600}
-button.primary:hover{background:var(--acc-dk);border-color:var(--acc-dk)}
-button.ok{background:var(--ok);border-color:var(--ok);color:#fff;font-weight:600}
-button.danger{background:#fff;border-color:var(--err);color:var(--err)}
-button.danger:hover{background:var(--err);color:#fff}
-button.sm{padding:.28rem .55rem;font-size:.8rem}
-a.btn{display:inline-block;text-decoration:none;padding:.28rem .55rem;font-size:.8rem;
-  border-radius:var(--radius);border:1px solid var(--line);background:#fff;color:var(--fg)}
-a.btn:hover{background:var(--panel2);border-color:#aab2b8;text-decoration:none}
-/* ---- stats strip, like Pi-hole's dashboard tiles ---- */
-.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(9rem,1fr));
-       gap:.6rem;margin-bottom:1rem}
-.stat{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
-      padding:.75rem .9rem;box-shadow:0 1px 1px rgba(0,0,0,.06)}
-.stat .n{font-size:1.5rem;font-weight:600;line-height:1.1}
-.stat .k{color:var(--mut);font-size:.76rem;text-transform:uppercase;letter-spacing:.04em}
-/* ---- episodes ---- */
-.eps{display:grid;gap:.6rem}
-.ep{display:flex;gap:.9rem;padding:.85rem;background:var(--panel2);
-    border:1px solid #dfe3e7;border-radius:var(--radius);flex-wrap:wrap}
-.ep img{width:104px;height:58px;border-radius:3px;object-fit:cover;background:#dfe3e7;flex:none}
-.ep .info{flex:1 1 16rem;min-width:0}
-.ep .t{font-weight:600;overflow-wrap:anywhere}
-.ep .meta{color:var(--mut);font-size:.8rem;margin:.1rem 0 .3rem}
-.ep .sum{font-size:.85rem;color:#4a545b;max-height:4.6rem;overflow:hidden}
-.ep .sum.open{max-height:none}
-.ep .acts{display:flex;gap:.35rem;margin-top:.5rem;flex-wrap:wrap;align-items:center}
-.tag{display:inline-block;padding:.05rem .4rem;border-radius:2px;font-size:.7rem;
-     background:#dfe3e7;color:var(--mut);margin-left:.3rem}
-.tag.live{background:#fbe3e4;color:#c0392b}
-select.pick{width:auto;min-width:12rem}
-.grid{display:grid;gap:1rem}
-.f{border-bottom:1px solid #e9ecef;padding:.85rem 0}
-.f:last-child{border-bottom:0}
-.f label{display:block;font-weight:600;font-size:.88rem;margin-bottom:.15rem}
-.f .d{color:var(--mut);font-size:.78rem;margin-bottom:.4rem}
-.row{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}
-.row .grow{flex:1 1 14rem}
-.pill{display:inline-block;padding:.05rem .45rem;border-radius:2px;font-size:.72rem;
-      background:#dfe3e7;color:var(--mut);margin-left:.4rem}
-.pill.secret{background:#fcf3e3;color:#8a6d3b}
-#toast{position:fixed;left:50%;transform:translateX(-50%);bottom:1.5rem;
-  background:#333c43;color:#fff;padding:.6rem 1rem;border-radius:var(--radius);
-  font-size:.86rem;box-shadow:0 3px 10px rgba(0,0,0,.25);opacity:0;
-  pointer-events:none;transition:opacity .2s;z-index:50}
+.patio-page{max-width:74rem}
+.rp-tabs{display:flex;gap:var(--s-1);flex-wrap:wrap}
+.rp-tabs .on{background:var(--terracotta);border-color:var(--terracotta);color:#fff}
+.patio-btn--sm{padding:var(--s-1) var(--s-2);font-size:var(--t-mono)}
+.patio-btn--danger{color:var(--wine);border-color:var(--line)}
+.patio-btn--danger:hover{background:var(--stone-2)}
+.patio-panel--flush{padding:0}
+.rp-copy{display:flex;gap:var(--s-2);align-items:center;flex-wrap:wrap;margin-top:var(--s-2)}
+.rp-copy input{flex:1 1 18rem;min-width:12rem}
+.rp-ep{padding:0;overflow:hidden}
+.rp-ep__art{width:120px;aspect-ratio:16/9;object-fit:cover;background:var(--stone-2);flex:none}
+.rp-ep__body{flex:1 1 18rem;min-width:0;padding:var(--s-3) var(--s-4)}
+.rp-ep__title{font-size:var(--t-tile);font-weight:600;overflow-wrap:anywhere}
+.rp-ep__meta{color:var(--ink-label);font-size:var(--t-label);letter-spacing:.04em;
+             text-transform:uppercase;margin:var(--s-1) 0;display:flex;gap:var(--s-2);flex-wrap:wrap}
+.rp-ep__sum{color:var(--ink-soft);font-size:var(--t-body);
+            display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.rp-ep__sum.open{-webkit-line-clamp:unset;display:block}
+.rp-ep__acts{display:flex;gap:var(--s-2);align-items:center;flex-wrap:wrap;margin-top:var(--s-3)}
+.rp-ep__acts audio{height:2rem;flex:1 1 14rem;min-width:10rem}
+.rp-list{display:flex;flex-direction:column;gap:var(--s-3)}
+.rp-row{display:flex;gap:var(--s-2);align-items:center;flex-wrap:wrap}
+.rp-grow{flex:1 1 14rem}
+.rp-label{font-size:var(--t-label);text-transform:uppercase;letter-spacing:.09em;color:var(--ink-label)}
+.patio-field-pick{width:auto;min-width:12rem;background:var(--stone-2);border:1px solid var(--line);border-radius:var(--r-sm);padding:var(--s-1) var(--s-2);font:inherit;color:var(--ink)}
+.rp-banner{background:var(--stone-2);border-left:4px solid var(--ocre);border-radius:var(--r-sm);
+  padding:var(--s-3) var(--s-4);margin-bottom:var(--s-4);font-size:var(--t-body)}
+.rp-chips{display:flex;gap:var(--s-2);align-items:center;flex-wrap:wrap;margin-top:var(--s-2)}
+.rp-chanrow{display:flex;gap:var(--s-2);align-items:center;margin-bottom:var(--s-2)}
+.rp-chanrow input{flex:1 1 auto;min-width:0}
+.rp-grid{display:grid;gap:var(--s-4)}
+.rp-field{border-bottom:1px solid var(--line);padding:var(--s-3) 0}
+.rp-field:last-child{border-bottom:0}
+.rp-field label{display:block;font-weight:600;font-size:var(--t-body)}
+.rp-field .d{color:var(--ink-soft);font-size:var(--t-body);margin:var(--s-1) 0 var(--s-2)}
+.rp-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(9rem,1fr));gap:var(--s-3);margin-bottom:var(--s-4)}
+.rp-ch{display:flex;gap:var(--s-4);align-items:flex-start;padding:var(--s-3);
+       background:var(--stone-1);border:1px solid var(--line);border-radius:var(--r-sm);
+       border-left:4px solid var(--celeste);margin-bottom:var(--s-3);flex-wrap:wrap}
+.rp-ch__art{width:56px;height:56px;border-radius:var(--r-pill);object-fit:cover;background:var(--stone-2);flex:none}
+.rp-ch__body{flex:1 1 14rem;min-width:0}
+.rp-ch__name{font-size:var(--t-tile);font-weight:600;overflow-wrap:anywhere}
+.rp-ch__count{color:var(--ink-label);font-size:var(--t-label);letter-spacing:.05em;text-transform:uppercase}
+#toast{position:fixed;left:50%;transform:translateX(-50%);bottom:var(--s-5);
+  background:var(--ink);color:var(--stone-0);padding:var(--s-2) var(--s-4);
+  border-radius:var(--r-sm);font-size:var(--t-body);box-shadow:var(--shadow-raised);
+  opacity:0;pointer-events:none;transition:opacity .2s;z-index:50}
 #toast.show{opacity:1}
-a{color:var(--acc)}
-footer{border-top:1px solid var(--line);color:var(--mut);font-size:.8rem;
-       text-align:center;padding:1.5rem 1rem 2.5rem;margin-top:1rem}
-@media (max-width:640px){
-  header .bar{padding:.55rem .7rem}
-  main{padding:1rem .7rem 3rem}
-  .ep img{width:84px;height:48px}
-}
-</style></head><body>
-<header><div class="bar">
-  <h1>RumblingPodcast</h1>
-  <span class="sub">Rumble channels as podcasts</span>
-  <span class="grow"></span>
-  <nav>
-    <button data-tab="feeds" class="on">Feeds</button>
-    <button data-tab="episodes">Episodes</button>
-    <button data-tab="settings">Settings</button>
-    <button data-tab="api">API key</button>
+@media (max-width:34rem){.rp-ep__art{width:92px}}
+</style></head>
+<body class="patio">
+<main class="patio-page">
+
+<header class="patio-header patio-azulejo patio-cornice">
+  <div class="patio-header__row">
+    <h1 class="patio-header__title">RumblingPodcast</h1>
+    <span class="patio-header__sub">Rumble channels as podcasts</span>
+  </div>
+  <nav class="rp-tabs">
+    <button data-tab="feeds" class="patio-btn patio-btn--ghost on">Feeds</button>
+    <button data-tab="episodes" class="patio-btn patio-btn--ghost">Episodes</button>
+    <button data-tab="settings" class="patio-btn patio-btn--ghost">Settings</button>
+    <button data-tab="api" class="patio-btn patio-btn--ghost">API key</button>
   </nav>
-</div></header>
+</header>
 
-<main>
-  <!-- ============================ FEEDS ============================ -->
-  <section id="tab-feeds">
-    <div class="card">
-      <h2>Your podcast feeds</h2>
-      <p class="hint">Copy a link and paste it into your podcast app
-        (Apple Podcasts: Libraries → + → Add a Podcast by URL).</p>
-      <div class="row" style="margin:.7rem 0">
-        <button id="refresh" class="secondary">Check for new episodes now</button>
-        <span id="refreshMsg" class="hint"></span>
-      </div>
-      <div id="channels"><p class="hint">Loading…</p></div>
+<!-- ============================== FEEDS ============================== -->
+<section id="tab-feeds" aria-label="Feeds">
+  <section class="patio-panel patio-cornice">
+    <h2 class="patio-panel__title">Your podcast feeds</h2>
+    <p class="patio-panel__hint">Copy a link and paste it into your podcast app
+      (Apple Podcasts: Libraries &rarr; + &rarr; Add a Podcast by URL).</p>
+    <div class="rp-row" style="margin:var(--s-3) 0">
+      <button id="refresh" class="patio-btn">Check for new episodes now</button>
+      <span id="refreshMsg" class="patio-panel__hint" style="margin:0"></span>
     </div>
-    <div class="card">
-      <h2>All channels combined</h2>
-      <p class="hint">One feed with every channel mixed together.</p>
-      <div class="copyrow">
-        <input type="text" id="allfeed" readonly>
-        <button class="ok" data-copy="allfeed">Copy</button>
-      </div>
-      <div class="hint-inline">Feeds are reachable on your local network only.</div>
-    </div>
+    <div id="channels"><p class="patio-panel__hint">Loading&hellip;</p></div>
   </section>
 
-  <!-- =========================== EPISODES ========================== -->
-  <section id="tab-episodes" class="hidden">
-    <div class="stats" id="epStats"></div>
-    <div class="card">
-      <div class="row" style="margin-bottom:.9rem">
-        <h2 style="margin:0">Episodes</h2>
-        <span class="grow"></span>
-        <label class="hint" for="epFilter" style="margin:0">Channel</label>
-        <select id="epFilter" class="pick"></select>
-        <button class="sm" id="epReload">Reload</button>
-      </div>
-      <p class="hint">Everything the feeds currently publish, newest first. Play a
-        summary here, open the episode on Rumble, or download the audio.</p>
-      <div class="eps" id="epList"><p class="hint">Loading…</p></div>
+  <section class="patio-panel patio-cornice">
+    <h2 class="patio-panel__title">All channels combined</h2>
+    <p class="patio-panel__hint">One feed with every channel mixed together.</p>
+    <div class="rp-copy">
+      <input type="text" id="allfeed" readonly aria-label="Combined feed URL">
+      <button class="patio-btn patio-btn--ghost" data-copy="allfeed">Copy</button>
     </div>
+    <p class="patio-panel__hint" style="margin-top:var(--s-3)">Feeds are reachable on
+      your local network only.</p>
+  </section>
+</section>
+
+<!-- ============================= EPISODES ============================= -->
+<section id="tab-episodes" class="hidden" aria-label="Episodes">
+  <div class="rp-stats" id="epStats"></div>
+  <section class="patio-panel patio-cornice">
+    <div class="rp-row" style="margin-bottom:var(--s-3)">
+      <h2 class="patio-panel__title" style="margin:0">Episodes</h2>
+      <span class="rp-grow"></span>
+      <label class="patio-label" for="epFilter">Channel</label>
+      <select id="epFilter" class="patio-field-pick"></select>
+      <button class="patio-btn patio-btn--ghost patio-btn--sm" id="epReload">Reload</button>
+    </div>
+    <p class="patio-panel__hint">Everything the feeds currently publish, newest first.
+      Play a summary here, open the episode on Rumble, or download the audio.</p>
+    <div class="rp-list" id="epList"><p class="patio-panel__hint">Loading&hellip;</p></div>
+  </section>
+</section>
+
+<!-- ============================= SETTINGS ============================= -->
+<section id="tab-settings" class="hidden" aria-label="Settings">
+  <div class="rp-banner" id="restartBanner" hidden>
+    Changing the port or base URL takes effect after the feed server restarts.
+    Use the terminal: <code>sudo rp restart</code>
+  </div>
+  <section class="patio-panel patio-cornice">
+    <h2 class="patio-panel__title">Settings</h2>
+    <p class="patio-panel__hint">Every option the config file supports. Changes save
+      immediately and a timestamped backup is kept each time.</p>
+    <div class="rp-row" style="margin-bottom:var(--s-4)">
+      <button class="patio-btn" id="saveAll">Save changes</button>
+      <button class="patio-btn patio-btn--ghost" id="reload">Discard changes</button>
+      <span id="saveState" class="patio-panel__hint" style="margin:0"></span>
+    </div>
+    <div class="rp-grid" id="fields"><p class="patio-panel__hint">Loading&hellip;</p></div>
   </section>
 
-  <!-- =========================== SETTINGS ========================== -->
-  <section id="tab-settings" class="hidden">
-    <div class="banner" id="restartBanner">
-      Changing the port or base URL takes effect after the feed server restarts.
-      Use the terminal: <code>sudo rp restart</code>
+  <section class="patio-panel patio-cornice">
+    <h2 class="patio-panel__title">Channels</h2>
+    <p class="patio-panel__hint">Add or remove the Rumble channels you follow. Each one
+      becomes its own podcast feed.</p>
+    <div id="chanList"></div>
+    <div class="rp-row">
+      <input type="text" id="chanNew" class="rp-grow"
+             placeholder="URL, name or id &mdash; e.g. https://rumble.com/c/BeyondMystic">
+      <button class="patio-btn" id="chanAdd">Add</button>
     </div>
-    <div class="card">
-      <h2>Settings</h2>
-      <p class="hint">Every option the config file supports. Changes save immediately
-        and a timestamped backup is kept each time.</p>
-      <div class="row" style="margin-bottom:1rem">
-        <button class="primary" id="saveAll">Save changes</button>
-        <button class="ghost" id="reload">Discard changes</button>
-        <span id="saveState" class="hint-inline"></span>
-      </div>
-      <div class="grid" id="fields"><p class="hint">Loading…</p></div>
-    </div>
-
-    <div class="card">
-      <h2>Channels</h2>
-      <p class="hint">Add or remove the Rumble channels you follow. Each one becomes
-        its own podcast feed.</p>
-      <div id="chanList"></div>
-      <div class="chrow">
-        <input type="text" id="chanNew" class="grow"
-               placeholder="URL, name or id — e.g. https://rumble.com/c/BeyondMystic">
-        <button class="primary" id="chanAdd">Add</button>
-      </div>
-      <button class="primary" id="chanSave">Save channels</button>
-    </div>
+    <p style="margin-top:var(--s-3)">
+      <button class="patio-btn" id="chanSave">Save channels</button>
+    </p>
   </section>
+</section>
 
-  <!-- ============================= API ============================= -->
-  <section id="tab-api" class="hidden">
-    <div class="card">
-      <h2>OpenRouter API key</h2>
-      <p class="hint">Used only for AI summaries, and only with free models.
-        The key is never displayed after saving — it cannot be read back through
-        this page or any API.</p>
-      <div id="apiState"></div>
-      <div class="row" style="margin-top:.9rem">
-        <input type="password" id="apiKey" class="grow" autocomplete="off"
-               placeholder="sk-or-v1-…">
-        <button class="primary" id="apiSave">Save key</button>
-        <button class="ghost" id="apiClear">Remove key</button>
-      </div>
-      <div class="hint-inline">Leave empty and save to keep the current key unchanged.</div>
+<!-- =============================== API =============================== -->
+<section id="tab-api" class="hidden" aria-label="API key">
+  <section class="patio-panel patio-cornice">
+    <h2 class="patio-panel__title">OpenRouter API key</h2>
+    <p class="patio-panel__hint">Used only for AI summaries, and only with free models.
+      The key is never displayed after saving &mdash; it cannot be read back through
+      this page or any API.</p>
+    <div id="apiState"></div>
+    <div class="rp-row" style="margin-top:var(--s-3)">
+      <input type="password" id="apiKey" class="rp-grow" autocomplete="off"
+             placeholder="sk-or-v1-&hellip;">
+      <button class="patio-btn" id="apiSave">Save key</button>
+      <button class="patio-btn patio-btn--ghost patio-btn--danger" id="apiClear">Remove key</button>
     </div>
-    <div class="card">
-      <h2>Also settable from the terminal</h2>
-      <p class="hint">Run <code>sudo rp key set</code> to enter a key without typing it
-        into a web page.</p>
-    </div>
+    <p class="patio-panel__hint" style="margin-top:var(--s-2)">Leave empty and save to
+      keep the current key unchanged.</p>
   </section>
+  <section class="patio-panel patio-cornice">
+    <h2 class="patio-panel__title">Also settable from the terminal</h2>
+    <p class="patio-panel__hint">Run <code>sudo rp key set</code> to enter a key without
+      typing it into a web page.</p>
+  </section>
+</section>
 </main>
 
-<footer>RumblingPodcast · experimental project ·
+<footer class="patio-foot">RumblingPodcast &middot; experimental project &middot;
   <a href="https://github.com/iharshgandhi/RumblingPodcast">source &amp; licence</a></footer>
 
 <div id="toast" role="status" aria-live="polite"></div>
@@ -339,27 +282,34 @@ function feedUrl(slug) { return DATA.base + "/feeds/" + slug + ".xml"; }
 function renderChannels() {
   const box = $("#channels");
   if (!DATA.channels.length) {
-    box.innerHTML = '<p class="hint">No channels yet. Add one in the Settings tab.</p>';
+    box.innerHTML = '<p class="patio-panel__hint">No channels yet. ' +
+      "Add one in the Settings tab.</p>";
     return;
   }
   box.innerHTML = "";
   DATA.channels.forEach((c) => {
     const url = feedUrl(c.slug);
     const el = document.createElement("div");
-    el.className = "ch";
+    el.className = "rp-ch";
     el.innerHTML =
-      '<img alt="" src="' + c.art + '" onerror="this.style.visibility=\'hidden\'">' +
-      '<div class="info"><div class="nm"></div><div class="ct"></div>' +
-      '<div class="copyrow"><input type="text" readonly>' +
-      '<button class="ok">Copy</button>' +
-      '<button class="primary" data-explore="' + c.slug + '">Browse episodes</button>' +
-      '</div></div>';
-    el.querySelector(".nm").textContent = c.name;
-    el.querySelector(".ct").textContent = c.count + " episode" + (c.count === 1 ? "" : "s");
+      '<img class="rp-ch__art" alt="" src="' + c.art +
+      '" onerror="this.style.visibility=\'hidden\'">' +
+      '<div class="rp-ch__body">' +
+      '<div class="rp-ch__name"></div>' +
+      '<div class="rp-ch__count"></div>' +
+      '<div class="rp-copy"><input type="text" readonly>' +
+      '<button class="patio-btn patio-btn--ghost patio-btn--sm">Copy</button>' +
+      '<button class="patio-btn patio-btn--sm" data-explore="' + c.slug +
+      '">Browse episodes</button>' +
+      "</div></div>";
+    el.querySelector(".rp-ch__name").textContent = c.name;
+    el.querySelector(".rp-ch__count").textContent =
+      c.count + " episode" + (c.count === 1 ? "" : "s");
     const input = el.querySelector("input");
     input.value = url;
     input.id = "feed-" + c.slug;
-    el.querySelector("button.ok").dataset.copy = input.id;
+    input.setAttribute("aria-label", "Feed URL for " + c.name);
+    el.querySelector(".patio-btn--ghost").dataset.copy = input.id;
     box.appendChild(el);
   });
 }
@@ -388,13 +338,13 @@ async function loadEpisodes() {
   // option list being regenerated from DATA.
   const want = pendingChannel || pick.value;
   pendingChannel = "";
-  box.innerHTML = '<p class="hint">Loading\u2026</p>';
+  box.innerHTML = '<p class="patio-panel__hint">Loading\u2026</p>';
   let data;
   try {
     const q = want ? "?channel=" + encodeURIComponent(want) : "";
     data = await api("/api/episodes" + q);
   } catch (e) {
-    box.innerHTML = '<p class="hint">Could not load: ' + e.message + "</p>";
+    box.innerHTML = '<p class="patio-panel__hint">Could not load: ' + e.message + "</p>";
     return;
   }
   const eps = data.episodes || [];
@@ -413,14 +363,14 @@ async function loadEpisodes() {
   const total = (DATA.channels || []).reduce((a, c) => a + c.count, 0);
   $("#epStats").innerHTML = [
     ["Episodes", all],
-    ["Across channels", (DATA.channels || []).length],
-    ["Feeds publish", total],
+    ["Channels", (DATA.channels || []).length],
+    ["Published", total],
   ].map(([k, n]) =>
-    '<div class="stat"><div class="n">' + n + '</div><div class="k">' +
-    k + "</div></div>").join("");
+    '<div class="patio-stat"><div class="patio-stat__value">' + n +
+    '</div><div class="patio-stat__label">' + k + "</div></div>").join("");
 
   if (!eps.length) {
-    box.innerHTML = '<p class="hint">No episodes published yet. Press ' +
+    box.innerHTML = '<p class="patio-panel__hint">No episodes published yet. Press ' +
       '"Check for new episodes now" on the Feeds tab, or wait for the ' +
       "nightly run.</p>";
     return;
@@ -428,37 +378,45 @@ async function loadEpisodes() {
 
   box.innerHTML = eps.map((e, i) => {
     const id = "sum-" + i;
-    return '<div class="ep">' +
-      '<img alt="" src="' + e.art + '" onerror="this.style.visibility=\'hidden\'">' +
-      '<div class="info">' +
-      '<div class="t"></div>' +
-      '<div class="meta"><span class="ch"></span> \u00b7 <span class="dt"></span>' +
-      '<span class="tag live" hidden>livestream</span>' +
-      '<span class="du"></span></div>' +
-      '<div class="sum" id="' + id + '"></div>' +
-      '<div class="acts">' +
-      '<button class="sm" data-more="' + id + '">Show full summary</button>' +
-      '<audio class="au" controls preload="none" style="flex:1 1 14rem"></audio>' +
-      (e.page ? '<a class="btn sm" target="_blank" rel="noopener" href="' +
-        e.page + '">Watch on Rumble</a>' : "") +
-      (e.audio ? '<a class="btn sm" href="' + e.audio +
-        '" download>Download audio</a>' : "") +
-      '</div></div></div>';
+    return '<article class="rp-ch rp-ep">' +
+      '<img class="rp-ep__art" alt="" src="' + e.art +
+      '" onerror="this.style.visibility=\'hidden\'">' +
+      '<div class="rp-ep__body">' +
+      '<h3 class="rp-ep__title"></h3>' +
+      '<div class="rp-ep__meta">' +
+      '<span class="rp-ep__ch"></span>' +
+      '<span class="rp-ep__dt"></span>' +
+      '<span class="rp-ep__du"></span>' +
+      '<span class="patio-chip patio-chip--live" hidden>Livestream</span>' +
+      '</div>' +
+      '<div class="rp-ep__sum" id="' + id + '"></div>' +
+      '<div class="rp-ep__acts">' +
+      '<button class="patio-btn patio-btn--ghost patio-btn--sm" data-more="' + id +
+      '">Show full summary</button>' +
+      '<audio class="rp-ep__audio" controls preload="none"></audio>' +
+      (e.page ? '<a class="patio-btn patio-btn--ghost patio-btn--sm" target="_blank"' +
+        ' rel="noopener" href="' + e.page + '">Watch on Rumble</a>' : "") +
+      (e.audio ? '<a class="patio-btn patio-btn--ghost patio-btn--sm" href="' +
+        e.audio + '" download>Download</a>' : "") +
+      '</div></div></article>';
   }).join("");
 
   eps.forEach((e, i) => {
     const card = box.children[i];
-    card.querySelector(".t").textContent = e.title || "Untitled";
-    card.querySelector(".ch").textContent = e.channelName || e.channel;
-    card.querySelector(".dt").textContent = fmtDate(e.date);
-    if (e.live) card.querySelector(".tag.live").hidden = false;
+    card.querySelector(".rp-ep__title").textContent = e.title || "Untitled";
+    card.querySelector(".rp-ep__ch").textContent = e.channelName || e.channel;
+    card.querySelector(".rp-ep__dt").textContent = fmtDate(e.date);
+    if (e.live) card.querySelector(".patio-chip--live").hidden = false;
     const bits = [];
     if (e.duration) bits.push(e.duration);
     const b = fmtBytes(e.bytes);
     if (b) bits.push(b);
-    card.querySelector(".du").textContent = bits.join(" \u00b7 ");
-    card.querySelector(".sum").textContent = e.description || "No summary yet.";
-    card.querySelector(".au").src = e.audio || "";
+    card.querySelector(".rp-ep__du").textContent = bits.join(" \u00b7 ");
+    const sum = card.querySelector(".rp-ep__sum");
+    sum.textContent = e.description || "No summary yet.";
+    // Never truncate without keeping the full text reachable.
+    sum.title = sum.textContent;
+    card.querySelector(".rp-ep__audio").src = e.audio || "";
   });
 
   box.addEventListener("click", (ev) => {
@@ -507,8 +465,8 @@ function renderFields() {
         String(val).replace(/"/g, "&quot;") + '">';
     }
     wrap.innerHTML = "<label>" + spec.label + "</label>" +
-      (spec.desc ? '<div class="d">' + spec.desc + "</div>" : "") +
-      '<div class="row"><div class="grow">' + ctrl + "</div></div>";
+      (spec.desc ? '<div class="d rp-field__d">' + spec.desc + "</div>" : "") +
+      '<div class="rp-row"><div class="rp-grow">' + ctrl + "</div></div>";
     box.appendChild(wrap);
   });
 }
@@ -536,7 +494,7 @@ function renderChannelEditor() {
   DATA.config.channels.split(" ").filter(Boolean).forEach((slug) => {
     const row = document.createElement("div");
     row.className = "chrow";
-    row.innerHTML = '<input type="text" class="grow" value="' +
+    row.innerHTML = '<input type="text" class="rp-grow" value="' +
       slug.replace(/"/g, "&quot;") + '"><button class="ghost rm sm">Remove</button>';
     row.querySelector(".rm").addEventListener("click", () => row.remove());
     box.appendChild(row);
@@ -559,9 +517,9 @@ async function saveChannels() {
 function renderApi() {
   const box = $("#apiState");
   box.innerHTML = DATA.hasKey
-    ? '<p class="hint">A key is saved <span class="pill secret">hidden</span>' +
+    ? '<p class="patio-panel__hint">A key is saved <span class="patio-chip patio-chip--warn">hidden</span>' +
       ' Summaries use free models only. Enter a new key below to replace it.</p>'
-    : '<p class="hint">No key saved. Summaries fall back to the built-in ' +
+    : '<p class="patio-panel__hint">No key saved. Summaries fall back to the built-in ' +
       'extractive summariser.</p>';
 }
 
@@ -591,7 +549,7 @@ $("#chanAdd").addEventListener("click", () => {
   if (!v) return;
   const row = document.createElement("div");
   row.className = "chrow";
-  row.innerHTML = '<input type="text" class="grow" value="' +
+  row.innerHTML = '<input type="text" class="rp-grow" value="' +
     v.replace(/"/g, "&quot;") + '"><button class="ghost rm sm">Remove</button>';
   row.querySelector(".rm").addEventListener("click", () => row.remove());
   $("#chanList").appendChild(row);
@@ -633,7 +591,7 @@ async function load() {
       showTab(want);
     }
   } catch (e) {
-    $("#channels").innerHTML = '<p class="hint">Could not load: ' +
+    $("#channels").innerHTML = '<p class="patio-panel__hint">Could not load: ' +
       e.message.replace(/</g, "&lt;") + "</p>";
   }
 }
