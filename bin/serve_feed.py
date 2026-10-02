@@ -38,6 +38,15 @@ import rp_api
 import patio_theme
 import rp_ui
 
+def _rfc822_epoch(s):
+    """Parse an RFC822 pubDate into an epoch, or 0 if it will not parse."""
+    try:
+        from email.utils import parsedate_to_datetime
+        return int(parsedate_to_datetime(s).timestamp())
+    except Exception:
+        return 0
+
+
 DESCRIPTIONS = {
     "channels": "Rumble channels you follow. Each becomes its own podcast.",
     "serve_port": "The port in your feed URL. Keep it once chosen.",
@@ -304,6 +313,11 @@ class FeedHandler(BaseHTTPRequestHandler):
                     "title": txt("title"),
                     "description": txt("description"),
                     "date": txt("pubDate"),
+                    # Sort on a real epoch. Sorting the RFC822 string itself puts
+                    # "Thu, 01 Oct" under "T" and below every September entry,
+                    # so newest-first silently became wrong for any month whose
+                    # weekday letter sorts low.
+                    "_epoch": _rfc822_epoch(txt("pubDate")),
                     "duration": dur,
                     "audio": enc.get("url") if enc is not None else "",
                     "bytes": int(enc.get("length") or 0) if enc is not None else 0,
@@ -312,7 +326,9 @@ class FeedHandler(BaseHTTPRequestHandler):
                     "transcript": (base + "/media/%s.vtt" % vid) if vid else "",
                     "live": live == "1",
                 })
-        out.sort(key=lambda e: e["date"], reverse=True)
+        out.sort(key=lambda e: e["_epoch"], reverse=True)
+        for e in out:
+            e.pop("_epoch", None)
         self.send_json({"episodes": out, "base": base})
 
     def do_POST(self):
