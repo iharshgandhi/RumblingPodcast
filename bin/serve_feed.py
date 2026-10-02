@@ -30,6 +30,7 @@ import argparse
 import urllib.parse
 import subprocess
 import threading
+import xml.etree.ElementTree as ET
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -244,6 +245,75 @@ class FeedHandler(BaseHTTPRequestHandler):
                 if k not in rp_api.SECRET_KEYS}
         self.send_json({"ok": True, "config": safe})
 
+    def api_episodes(self):
+        """Every published episode, newest first, for the in-browser browser.
+
+        Reads the same per-channel feeds that are served as RSS, so what a user
+        sees here is exactly what a podcast app would.
+        """
+        slug = urllib.parse.parse_qs(
+            urllib.parse.urlparse(self.path).query).get("channel", [""])[0]
+        base = self.server.public_base()
+        out = []
+        feeddir = os.path.join(self.server.root, "feeds")
+        for fn in sorted(os.listdir(feeddir) if os.path.isdir(feeddir) else []):
+            if not fn.endswith(".xml"):
+                continue
+            ch_slug = fn[:-4]
+            if slug and ch_slug != slug:
+                continue
+            path = os.path.join(feeddir, fn)
+            try:
+                tree = ET.parse(path)
+            except (ET.ParseError, OSError):
+                continue
+            rss = tree.getroot()
+            chan = rss.find("channel")
+            if chan is None:
+                continue
+            name_el = chan.find("title")
+            chan_name = (name_el.text or "").strip() if name_el is not None \
+                else ch_slug
+            # The feed's own <title> is the channel name; the per-channel title
+            # element inside each item is the episode title.
+            for item in chan.findall("item"):
+                def txt(tag):
+                    el = item.find(tag)
+                    return (el.text or "").strip() if el is not None else ""
+                dur = txt("{http://www.itunes.com/dtds/podcast-1.0.dtd}duration")
+                art = item.find("{http://www.itunes.com/dtds/podcast-1.0.dtd}image")
+                art_url = art.get("href") if art is not None else ""
+                enc = item.find("enclosure")
+                guid = txt("guid")
+                vid = guid.replace("rumble-", "") if guid.startswith(
+                    "rumble-") else ""
+                live = "0"
+                if vid:
+                    meta = os.path.join(self.server.root, "meta", vid + ".meta")
+                    try:
+                        for line in open(meta, encoding="utf-8",
+                                         errors="replace"):
+                            if line.startswith("LIVE="):
+                                live = line.split("=", 1)[1].strip()
+                    except OSError:
+                        pass
+                out.append({
+                    "channel": ch_slug,
+                    "channelName": chan_name,
+                    "title": txt("title"),
+                    "description": txt("description"),
+                    "date": txt("pubDate"),
+                    "duration": dur,
+                    "audio": enc.get("url") if enc is not None else "",
+                    "bytes": int(enc.get("length") or 0) if enc is not None else 0,
+                    "art": art_url or (base + "/media/channel-%s.jpg" % ch_slug),
+                    "page": ("https://rumble.com/%s" % vid) if vid else "",
+                    "transcript": (base + "/media/%s.vtt" % vid) if vid else "",
+                    "live": live == "1",
+                })
+        out.sort(key=lambda e: e["date"], reverse=True)
+        self.send_json({"episodes": out, "base": base})
+
     def do_POST(self):
         path = self.path.split("?", 1)[0]
         if path == "/api/config":
@@ -312,6 +382,8 @@ class FeedHandler(BaseHTTPRequestHandler):
         path = urllib.parse.urlparse(self.path).path
         if path == "/api/ui":
             return self.send_json(self.api_ui())
+        if path == "/api/episodes":
+            return self.api_episodes()
         # The web UI replaces the bare index page; index.html still works.
         if path in ("/", "/index.html", "/ui"):
             _, csrf = self.ensure_session()

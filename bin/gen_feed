@@ -111,6 +111,37 @@ gen_channel_feed() {
         printf '      <podcast:transcript url="%s" type="text/vtt" language="%s"/>\n' \
           "$(xml_escape "$base_url/media/${id}.vtt")" "$lang"
       fi
+      # Also publish the plain transcript as text/html. Apple accepts either
+      # format; offering both means a client that rejects one still has the
+      # other. Episodes with no timed cues at all only have this one.
+      if [ -s "$RP_DATA/transcripts/${id}.txt" ]; then
+        # Wrap the plain transcript in minimal HTML. Serving the raw .txt as
+        # text/html would collapse the whole thing onto one unbroken line.
+        local htmldir="$outdir/media"
+        mkdir -p "$htmldir"
+        if [ ! -s "$htmldir/${id}.html" ]; then
+          {
+            printf '<!doctype html><html lang="%s"><head>' "$lang"
+            printf '<meta charset="utf-8"><title>Transcript</title></head>'
+            printf '<body style="font:16px/1.6 -apple-system,BlinkMacSystemFont,' \
+                   'Segoe UI,Roboto,sans-serif;margin:1.5rem;max-width:44rem">'
+            printf '<pre style="white-space:pre-wrap;font:inherit">'
+            # Escape with sed directly from the file. Going through $(xml_escape
+            # ...) would run the text through command substitution, which eats
+            # every trailing newline and renders the transcript as one run-on
+            # line.
+            sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' \
+                -e 's/"/\&quot;/g' -e "s/'/\&apos;/g" \
+                "$RP_DATA/transcripts/${id}.txt" \
+              || rm -f "$htmldir/${id}.html"
+            printf '</pre></body></html>\n'
+          } > "$htmldir/${id}.html" 2>/dev/null || rm -f "$htmldir/${id}.html"
+        fi
+        if [ -s "$htmldir/${id}.html" ]; then
+          printf '      <podcast:transcript url="%s" type="text/html" language="%s"/>\n' \
+            "$(xml_escape "$base_url/media/${id}.html")" "$lang"
+        fi
+      fi
       printf '      <itunes:duration>%s</itunes:duration>\n' "$dur_str"
       printf '      <itunes:explicit>false</itunes:explicit>\n'
       printf '      <itunes:image href="%s"/>\n' "$(xml_escape "$art_url")"

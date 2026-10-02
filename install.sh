@@ -251,6 +251,21 @@ fi
 for t in ffmpeg jq curl; do
   command -v "$t" >/dev/null && c_ok "$t ready" || c_err "$t MISSING"
 done
+# whisper.cpp transcribes videos that have no Rumble captions. Most Rumble
+# videos do have them, but a channel that streams live often does not, and
+# without this those episodes silently get no transcript at all. It is optional:
+# if it cannot be installed, say so plainly rather than leaving a broken
+# fallback that looks like a success.
+if ! command -v whisper-cli >/dev/null 2>&1; then
+  if apt-get install -y --no-install-recommends whisper-cpp >/dev/null 2>&1 \
+     && command -v whisper-cli >/dev/null 2>&1; then
+    c_ok "whisper-cli ready (fallback transcription)"
+  else
+    c_warn "whisper-cli unavailable - videos without Rumble captions will have no transcript"
+    c_warn "  install it later with: sudo apt-get install whisper-cpp"
+  fi
+fi
+
 # python3 is used only by the feed web server (standard library only).
 command -v python3 >/dev/null || {
   apt-get install -y --no-install-recommends python3 2>/dev/null \

@@ -87,8 +87,21 @@ make_wav() {
 # Run whisper.cpp; prints transcript path on success.
 transcribe_whisper() {
   local wav="$1" outdir="$2" base="$3"
-  local whisper="$RP_BIN/whisper-cli"
-  [ -x "$whisper" ] || { log_error "whisper-cli missing at $whisper"; return 1; }
+  # whisper-cli is a system package (like ffmpeg), not something shipped in the
+  # app's bin/. Looking for it at $RP_BIN made every caption-less episode fail
+  # with "whisper-cli missing" even where it was installed system-wide.
+  local whisper
+  whisper="$(command -v whisper-cli || true)"
+  [ -n "$whisper" ] && [ -x "$whisper" ] || {
+    whisper=""
+    for cand in /usr/local/bin/whisper-cli /usr/bin/whisper-cli; do
+      if [ -x "$cand" ]; then whisper="$cand"; break; fi
+    done
+  }
+  [ -n "$whisper" ] || {
+    log_error "whisper-cli not found (install whisper.cpp, or set use_captions=1 and rely on Rumble captions)"
+    return 1
+  }
   local model="$RP_MODEL_DIR/$(cfg whisper_model_file ggml-tiny.en.bin)"
   if [ ! -s "$model" ]; then
     log_warn "whisper model missing: $model"
