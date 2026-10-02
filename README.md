@@ -120,6 +120,10 @@ exact address, and `rp status` shows it later.
 
 ![The Feeds tab: one row per channel, with Copy and Browse episodes buttons](docs/screenshot-feeds.png)
 
+The interface follows the *Patio* design system — the same warm, tiles-and-terracotta
+theme used by [PiHome](https://github.com/iharshgandhi/PiHome), so everything on
+your machine looks like it came from the same building.
+
 ![The Episodes tab: every published episode with artwork, summary and a player](docs/screenshot-episodes.png)
 
 ### Check for new episodes now

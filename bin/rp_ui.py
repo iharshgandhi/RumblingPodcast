@@ -38,11 +38,37 @@ PAGE = r"""<!doctype html>
 .rp-ep__title{font-size:var(--t-tile);font-weight:600;overflow-wrap:anywhere}
 .rp-ep__meta{color:var(--ink-label);font-size:var(--t-label);letter-spacing:.04em;
              text-transform:uppercase;margin:var(--s-1) 0;display:flex;gap:var(--s-2);flex-wrap:wrap}
-.rp-ep__sum{color:var(--ink-soft);font-size:var(--t-body);
-            display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.rp-ep__sum{color:var(--ink-soft);font-size:var(--t-body);position:relative;
+            display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;
+            -webkit-mask-image:linear-gradient(180deg,#000 62%,transparent 100%);
+            mask-image:linear-gradient(180deg,#000 62%,transparent 100%)}
 .rp-ep__sum.open{-webkit-line-clamp:unset;display:block}
 .rp-ep__acts{display:flex;gap:var(--s-2);align-items:center;flex-wrap:wrap;margin-top:var(--s-3)}
 .rp-ep__acts audio{height:2rem;flex:1 1 14rem;min-width:10rem}
+/* The theme styles inputs only inside .patio-field, and most of ours sit
+   outside one (URL boxes, the API key, the channel editor). Without this they
+   render as unstyled default browser controls: grey borders, black text, square
+   corners, and they do not match the page at all. */
+.patio-page input[type=text],
+.patio-page input[type=number],
+.patio-page input[type=password],
+.patio-page select,
+.patio-page textarea{
+  background:var(--stone-0);color:var(--ink);
+  border:1px solid var(--line);border-radius:var(--r-sm);
+  padding:var(--s-2) var(--s-3);font:inherit;width:100%}
+.patio-page input::placeholder{color:var(--ink-faint)}
+.patio-page input:focus-visible,
+.patio-page select:focus-visible,
+.patio-page textarea:focus-visible{
+  outline:2px solid var(--ocre);outline-offset:2px;border-color:var(--ocre)}
+.patio-page input[readonly]{background:var(--stone-2);color:var(--ink-soft)}
+/* Stat tiles: give them a real surface so they do not float on the page ground. */
+.rp-stats .patio-stat{
+  background:var(--stone-1);border:1px solid var(--line);
+  border-left:4px solid var(--terracotta);border-radius:var(--r-md);
+  padding:var(--s-3) var(--s-4);box-shadow:var(--shadow-raised);
+  font-variant-numeric:tabular-nums}
 .rp-list{display:flex;flex-direction:column;gap:var(--s-3)}
 .rp-row{display:flex;gap:var(--s-2);align-items:center;flex-wrap:wrap}
 .rp-grow{flex:1 1 14rem}
@@ -448,7 +474,7 @@ function renderFields() {
     const spec = DATA.schema[f];
     if (!spec) return;
     const wrap = document.createElement("div");
-    wrap.className = "f";
+    wrap.className = "rp-field";
     const val = DATA.config[f] === undefined ? "" : DATA.config[f];
     let ctrl;
     if (ENUM_FIELDS[f]) {
@@ -493,7 +519,7 @@ function renderChannelEditor() {
   box.innerHTML = "";
   DATA.config.channels.split(" ").filter(Boolean).forEach((slug) => {
     const row = document.createElement("div");
-    row.className = "chrow";
+    row.className = "rp-chanrow";
     row.innerHTML = '<input type="text" class="rp-grow" value="' +
       slug.replace(/"/g, "&quot;") + '"><button class="ghost rm sm">Remove</button>';
     row.querySelector(".rm").addEventListener("click", () => row.remove());
@@ -548,7 +574,7 @@ $("#chanAdd").addEventListener("click", () => {
   const v = $("#chanNew").value.trim();
   if (!v) return;
   const row = document.createElement("div");
-  row.className = "chrow";
+  row.className = "rp-chanrow";
   row.innerHTML = '<input type="text" class="rp-grow" value="' +
     v.replace(/"/g, "&quot;") + '"><button class="ghost rm sm">Remove</button>';
   row.querySelector(".rm").addEventListener("click", () => row.remove());
