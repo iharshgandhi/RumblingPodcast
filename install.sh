@@ -257,12 +257,30 @@ done
 # if it cannot be installed, say so plainly rather than leaving a broken
 # fallback that looks like a success.
 if ! command -v whisper-cli >/dev/null 2>&1; then
+  # Debian does not package whisper.cpp under this name in most releases, so try
+  # apt quietly first and fall back to building from source. Building needs cmake
+  # and a C++ compiler, which is a heavy ask for a Pi, so if that is missing we
+  # say so plainly instead of pretending the fallback is covered.
   if apt-get install -y --no-install-recommends whisper-cpp >/dev/null 2>&1 \
      && command -v whisper-cli >/dev/null 2>&1; then
     c_ok "whisper-cli ready (fallback transcription)"
+  elif command -v cmake >/dev/null 2>&1 && command -v g++ >/dev/null 2>&1; then
+    c_info "building whisper.cpp from source (one-off, several minutes)"
+    _wtmp="$(mktemp -d)"
+    if git clone --depth 1 https://github.com/ggerganov/whisper.cpp "$_wtmp/w" \
+         >/dev/null 2>&1 \
+       && cmake -S "$_wtmp/w" -B "$_wtmp/b" -DWHISPER_BUILD_TESTS=OFF \
+            -DWHISPER_BUILD_EXAMPLES=ON >/dev/null 2>&1 \
+       && cmake --build "$_wtmp/b" -j2 --target whisper-cli >/dev/null 2>&1; then
+      install -m 755 "$_wtmp/b/whisper-cli" /usr/local/bin/whisper-cli
+      c_ok "whisper-cli ready (fallback transcription)"
+    else
+      c_warn "could not build whisper.cpp - videos without Rumble captions get no transcript"
+    fi
+    rm -rf "$_wtmp"
   else
-    c_warn "whisper-cli unavailable - videos without Rumble captions will have no transcript"
-    c_warn "  install it later with: sudo apt-get install whisper-cpp"
+    c_warn "whisper-cli unavailable - videos without Rumble captions get no transcript"
+    c_warn "  install it later with: sudo apt-get install cmake g++ && re-run the installer"
   fi
 fi
 

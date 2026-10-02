@@ -92,6 +92,16 @@ class ConfigError(Exception):
 # ---------------------------------------------------------------------------
 # Reading / writing rp.conf
 # ---------------------------------------------------------------------------
+# A config file can contain "key =" with nothing after it. Treating that as an
+# empty string is worse than useless: it shows as a blank box in the web UI and,
+# for a numeric field, would read as 0. Substitute the documented default.
+BLANK_MEANS_DEFAULT = {
+    "remote_max_tries": "5",
+    "or_cache_ttl": "21600",
+    "extractive_sentences": "7",
+}
+
+
 def parse_conf(text):
     """Return an ordered {key: value} of the last definition of each key."""
     out = {}
@@ -100,7 +110,13 @@ def parse_conf(text):
         if not line or "=" not in line:
             continue
         key, _, val = line.partition("=")
-        out[key.strip()] = val.strip().strip('"').strip("'")
+        key = key.strip()
+        val = val.strip().strip('"').strip("'")
+        # A key with no value means "unset", not "the empty string". Substituting
+        # the default here stops a blank box reaching the settings UI.
+        if not val and key in BLANK_MEANS_DEFAULT:
+            val = BLANK_MEANS_DEFAULT[key]
+        out[key] = val
     return out
 
 
@@ -110,6 +126,8 @@ def read_conf(path):
 
 
 def validate(key, value):
+    if isinstance(value, str) and not value.strip():
+        value = BLANK_MEANS_DEFAULT.get(key, value)
     """Validate one value. Raises ConfigError with a human-readable message."""
     ftype = dict((k, t) for k, t, _l, _s in FIELDS).get(key, "text")
 

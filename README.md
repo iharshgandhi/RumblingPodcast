@@ -118,7 +118,9 @@ transcripts, artwork and a basic extractive summary.
 Open `http://<your-pi-address>:<port>` in any browser. The installer prints the
 exact address, and `rp status` shows it later.
 
-![The Feeds tab: one card per channel, with a Copy button next to each feed URL](docs/screenshot-feeds.png)
+![The Feeds tab: one row per channel, with Copy and Browse episodes buttons](docs/screenshot-feeds.png)
+
+![The Episodes tab: every published episode with artwork, summary and a player](docs/screenshot-episodes.png)
 
 ### Check for new episodes now
 
@@ -225,6 +227,43 @@ remember anything:
 | `sudo rp pause` / `resume` | Stop / start it |
 | `sudo rp uninstall` | Remove it (keeps your data) |
 | `sudo rp uninstall --purge` | Remove everything, including downloads |
+
+### Transcripts in Apple Podcasts
+
+Every episode is published with **two** transcripts: a timed
+[WebVTT](https://developer.mozilla.org/en-US/docs/Web/API/WebVTT_API) file
+(`text/vtt`, so you can tap a line and playback jumps there) and a plain
+HTML version (`text/html`). Offering both means a client that will not take one
+still has the other.
+
+Both URLs are generated for you and already in the feed. To check yours:
+
+```bash
+grep -o 'podcast:transcript[^/]*/>' data/feeds/<channel>.xml
+```
+
+**Apple Podcasts needs two things turned on before it will show them, and
+neither is something this program can do for you:**
+
+1. In **Apple Podcasts Connect**, on your show page, set *Episodes* →
+   **"Display transcripts I provide"**. Apple creates its own transcripts by
+   default and ignores yours until you opt in. This is the step people miss.
+2. **Apple must be able to reach the feed.** Transcripts are fetched over the
+   network by Apple's servers, not by your phone. A feed on
+   `http://192.168.1.200:8088` is only reachable from your home network, so
+   Apple cannot index it. You need the HTTPS tunnel below.
+
+Until both are done, transcripts work in every other podcast app, and you can
+read them any time on the **Episodes** tab of the web page.
+
+### Browse episodes without a podcast app
+
+The **Episodes** tab lists everything the feeds currently publish: artwork,
+title, channel, date, duration, file size, the AI summary, an inline audio
+player, and links out to Rumble or a direct audio download. Filter it by
+channel, or press **Browse episodes** on any channel to jump straight there.
+It reads the same files the RSS feeds do, so it shows exactly what a podcast app
+would.
 
 ### Update yt-dlp
 
