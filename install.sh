@@ -284,6 +284,22 @@ if ! command -v whisper-cli >/dev/null 2>&1; then
   fi
 fi
 
+# The speech-to-text model is a separate download. Without it whisper-cli exits
+# immediately, which looks like transcription silently failing.
+_whisper_model="$(cfg whisper_model_file 2>/dev/null || echo ggml-tiny.en.bin)"
+_whisper_model="${_whisper_model:-ggml-tiny.en.bin}"
+_mdl_dir="$RP_ROOT/models"
+mkdir -p "$_mdl_dir" 2>/dev/null
+if command -v whisper-cli >/dev/null 2>&1 && [ ! -s "$_mdl_dir/$_whisper_model" ]; then
+  c_info "downloading the transcription model ($_whisper_model, ~75 MB)"
+  curl -fL --retry 2 --connect-timeout 20 -s \
+    -o "$_mdl_dir/$_whisper_model" \
+    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/$_whisper_model" \
+    && c_ok "transcription model ready" \
+    || { rm -f "$_mdl_dir/$_whisper_model"
+         c_warn "could not download the model - caption-less videos will have no transcript"; }
+fi
+
 # python3 is used only by the feed web server (standard library only).
 command -v python3 >/dev/null || {
   apt-get install -y --no-install-recommends python3 2>/dev/null \
